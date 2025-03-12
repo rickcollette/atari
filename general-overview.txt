@@ -1,0 +1,317 @@
+Atari XL/XE Hardware Technical Overview
+Serial I/O (SIO) – Atari’s Peripheral Bus
+Atari’s Serial Input/Output (SIO) is a proprietary 13-pin serial bus used on all Atari 8-bit computers to connect disk drives, printers, modems, cassette decks, etc.​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. Unlike simple RS-232 links, SIO allows multiple smart devices to daisy-chain on one port with plug-and-play support​
+EN.WIKIPEDIA.ORG
+. Each peripheral contains its own controller (e.g. disk drives include a 6507 CPU) and often a ROM-based driver that the computer can load at boot​
+EN.WIKIPEDIA.ORG
+. This design let Atari avoid internal expansion slots and FCC RF interference issues by offloading hardware to external devices​
+EN.WIKIPEDIA.ORG
+. Notably, SIO’s designer Joe Decuir credits it as inspiration for aspects of USB’s design​
+EN.WIKIPEDIA.ORG
+. SIO Port & Signals: The SIO interface uses a custom 13-pin connector carrying power and several control signals in addition to serial data​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. Key pins include separate Data In and Data Out lines for full-duplex byte transmission, Clock lines (in/out) for synchronization, a Command line (active during command frames), a Proceed line for ready/ack signals, a Motor Control line to remote-control tape drives, and an Interrupt line (though early peripherals didn’t use Interrupt)​
+EN.WIKIPEDIA.ORG
+​
+ALLPINOUTS.ORG
+. The port also provides +5V (approx 50 mA) to power small devices​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. Timing: SIO sends data asynchronously at ~19,200 baud by default (one start bit, 8 data bits LSB-first, one stop bit)​
+ALLPINOUTS.ORG
+. An external clock line exists for synchronous modes, but standard Atari OS does not use it​
+ALLPINOUTS.ORG
+. Instead, peripherals and computer synchronize using the defined frame protocol and the command/Proceed handshake. Protocol and Operation: All SIO transfers are initiated by the computer’s OS via the SIO vector (entry point) at ROM address $E459​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. The computer sends a 5-byte command frame (device ID, command code, two aux bytes, and checksum) while holding the Command line active (low)​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. Each device monitors the bus; only the addressed device responds, typically acknowledging with an ACK ($41) or negative-ACK ($4E)** byte​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. Depending on the command (read, write, status, etc.), either the computer or the peripheral then sends a data frame consisting of the payload bytes plus a checksum​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. Transfers conclude with the device sending a Completion code ($43 for OK or $45 for error) to signal the end of the operation​
+ALLPINOUTS.ORG
+. The standard command set covers basic I/O operations (e.g. $52=read, $57=write, $53=status, etc.) and device-specific commands like format ($21) or motor control ($55) for tape​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. The Atari OS abstracts SIO devices as file-like IOCB (I/O Control Block) devices, so programmers often use CIO (Central I/O) calls and let the OS’s SIO code handle the low-level signaling​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. Modern SIO Expansion: Enthusiasts have reverse-engineered SIO to create new peripherals and PC interfaces. One popular device is FujiNet, a WiFi-enabled multi-peripheral emulator that plugs into the SIO port and emulates disk drives, printers, modems, and more simultaneously​
+FUJINET.ONLINE
+​
+FUJINET.ONLINE
+. FujiNet’s microcontroller firmware handles the SIO protocol, letting an Atari load disk images over WiFi or access internet services through a virtual modem. Simpler projects like SIO2PC cables allow a modern computer to act as an Atari disk drive via an SIO-to-RS232 or USB interface. There are also SD-card based disk emulators (e.g. SIO2SD) that mount as drive devices and use the SIO bus for fast storage. These modern devices must adhere to SIO’s 19200 baud timing and command protocol – some even implement higher “burst” speeds and remain compatible with the Atari’s SIO BIOS routines. The extensibility of SIO is further demonstrated by Atari’s original 850 Interface (an SIO device providing RS-232 and Centronics ports) and the P:R: Connection interface – both expanded the 8-bit’s connectivity via SIO​
+ATARIMAX.COM
+​
+ATARIMAX.COM
+. Today’s creators build on this legacy, using microcontrollers (like Arduino or ESP32 in FujiNet) to implement SIO signaling in firmware and often providing updated device handler software for the Atari as needed.
+Joystick and Controller Ports
+All Atari 8-bit XL/XE computers feature the standard Atari 9-pin controller ports, inherited from the Atari 2600 console​
+EN.WIKIPEDIA.ORG
+. These ports support a variety of digital and analog input devices. Pinout: Each port is a female DE-9 connector with the following pin assignment​
+EN.WIKIPEDIA.ORG
+:
+Pin 1 – Up direction (joystick up)​
+EN.WIKIPEDIA.ORG
+Pin 2 – Down direction​
+EN.WIKIPEDIA.ORG
+Pin 3 – Left direction​
+EN.WIKIPEDIA.ORG
+Pin 4 – Right direction​
+EN.WIKIPEDIA.ORG
+Pin 5 – Paddle B analog input (potentiometer input for paddle controller B)​
+EN.WIKIPEDIA.ORG
+Pin 6 – Fire/Trigger (digital button input)​
+EN.WIKIPEDIA.ORG
+Pin 7 – +5V output (to power controllers, ~5V)​
+EN.WIKIPEDIA.ORG
+Pin 8 – Ground (common ground)​
+EN.WIKIPEDIA.ORG
+Pin 9 – Paddle A analog input (potentiometer input for paddle A)​
+EN.WIKIPEDIA.ORG
+For a simple Atari joystick (CX40 stick), pins 1–4 each connect to a switch that shorts to ground when pressed (representing up/down/left/right). Pin 6 is the fire button (also shorted to ground when pressed). The computer’s PIA chip reads the state of each direction as a bit, and the GTIA chip reads the trigger inputs (as TRIG0/TRIG1 registers for port 1 and 2)​
+ATARIWIKI.ORG
+​
+ATARIWIKI.ORG
+. When no button is pressed, these inputs are held high via pull-ups; pressing causes a 0. Reading joysticks in software is done by checking memory-mapped registers at $D300 for port directions (PORTA) and $D010-$D013 for triggers (GTIA)​
+ATARIWIKI.ORG
+​
+ATARIWIKI.ORG
+. Beyond digital sticks, the ports support analog controllers. The paddle controllers (pair of potentiometers) use pins 5 and 9 to feed variable voltage to the system’s POKEY chip. POKEY measures the RC timing to determine each paddle’s position (accessible via POT0–POT7 registers, since up to 8 analog inputs exist across 4 ports)​
+ATARIMANIA.COM
+​
+ATARIMANIA.COM
+. This analog capability enabled devices like the Atari Light Pen/Gun (which use a light sensor read via the paddle circuit and trigger line) and the Atari Touch Tablet (which provided X/Y analog voltages on the paddle lines)​
+ATARIMANIA.COM
+​
+ATARIMANIA.COM
+. In fact, many controller variations were built on this port: the Atari CX80 trackball could operate in joystick mode or emit quadrature pulses via the paddle lines; the driving controllers from the 2600 (steering wheel paddles) used Gray code signals on two direction pins​
+ATARIMANIA.COM
+​
+ATARIMANIA.COM
+. Interfacing and Protocols: The joystick port is electrically simple – most inputs are just switches to ground, debounced in hardware by minimal capacitors. No complex protocol is needed; reading a joystick is as simple as reading a bit in a PIA register. Analog inputs rely on POKEY’s built-in capacitor discharge timing mechanism (each POT line is charged and then allowed to decay through the external paddle resistance, with POKEY timing the interval to threshold). Because of this simplicity, adapting modern controllers is straightforward. Many hobbyists have created adapter cables or microcontroller interfaces to connect original Atari joysticks to USB for use on PCs, or conversely to allow modern gamepads on the Atari. For example, an Arduino-based adapter can read a USB gamepad and output the appropriate Atari 9-pin signals (mimicking ground closures on the correct pins) – effectively acting as a protocol translator. There are also multi-port adapters such as the “Multijoy” project in the Atari community, which multiplexes numerous joystick inputs into the ports for multiplayer games. These often use simple circuits (e.g. parallel-to-serial shift registers or multiplexers) to scan up to 8 or 16 joysticks through the two physical ports, with custom software to decode them. Modern Controller Projects: Given the standardization of the Atari DE-9 port (shared by Commodore, Sega, etc.), numerous modern projects exist. USB adapters (e.g. based on Arduino Pro Micro or Raspberry Pi Pico) can present an Atari-stick as a USB HID joystick​
+INSTRUCTABLES.COM
+. On the flip side, devices like 8BitDo retro receivers allow wireless Bluetooth gamepads to be used on original hardware by plugging into the 9-pin port. There are also specialized adapters to use Atari paddles on PCs by measuring their resistance via USB interfaces. Because the port has a fixed pinout, these projects don’t need to alter the Atari – they simply replicate the electrical signals. One creative use case of the joystick ports was Atari’s own XEP80 80-column adapter, which plugged into port 2 and repurposed some joystick lines as a serial interface (bit-banging an 4800 baud data link)​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. This demonstrates the flexibility of the port – developers can even use it for custom I/O with proper software, though standard controllers remain its primary use.
+Memory Mapping and Bank-Switching
+The Atari XL/XE series uses the 6502’s 16-bit address space (64KB) in a flexible mapped configuration to accommodate ROM, RAM, and hardware registers. Below is a breakdown of the typical XL/XE address map and how bank-switching extends it:
+$0000–$0FFF: Zero Page, Stack, and OS variables. The first 1KB includes zero-page ($00–$FF) and 6502 stack ($100–$1FF). Higher addresses up to ~$700 are used for system work variables, IOCB device control blocks ($300–$31F for SIO, etc.)​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+, and DOS vectors. For example, $0200–$02FF holds various buffers and vectors (e.g. disk boot sector buffer), and $0300–$03FF includes the CIO/SIO command frame buffer and parameters (DDEVIC at $300, etc.)​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+. These locations interface with OS routines; for instance, an SIO command is set up in this memory then the OS SIO routine is called​
+ALLPINOUTS.ORG
+​
+ALLPINOUTS.ORG
+.
+$1000–$3FFF: Main RAM (continued). On a 64KB machine, RAM continues through 16KB and beyond. The 800XL/65XE with 64KB have RAM covering from $0000 up to $BFFF (with some holes for device registers and option ROMs as described below). In a 64KB Atari, not all RAM is continuously usable at once due to overlaps with ROM – some portions can be switched between RAM and ROM. The 130XE with 128KB extends RAM via bank-switching (discussed shortly).
+Hardware Registers ($D000–$D7FF): At address $D000 (53248) start the memory-mapped I/O registers for Atari’s custom chips​
+ATARIWIKI.ORG
+​
+ATARIWIKI.ORG
+. This region (from $D000 up to $D7FF) includes registers for:
+GTIA/CTIA (graphics and joystick triggers) at $D000–$D01F​
+ATARIWIKI.ORG
+​
+ATARIWIKI.ORG
+ – e.g. player/missile position registers, collision registers, and console switches. Notably $D01F is CONSOL (console buttons) and $D010–$D013 are trigger inputs (TRIG0–TRIG3) for joystick fire buttons​
+ATARIWIKI.ORG
+. These 32 bytes repeat every 32 bytes up to $D0FF (mirroring)​
+ATARIWIKI.ORG
+​
+ATARIWIKI.ORG
+.
+POKEY (audio, keyboard, serial I/O, paddles) at $D200–$D21F​
+ATARIWIKI.ORG
+. POKEY has write registers for four audio channels (AUDFx/AUDCx at $D200-$D207) and read registers for POT0–POT7 (paddle inputs) and random number generator, among others​
+ATARIWIKI.ORG
+. For example, reading $D200 gives paddle 0 value​
+ATARIWIKI.ORG
+.
+PIA (6520) at $D300–$D303​
+ATARIWIKI.ORG
+. PIA Port A ($D300) reads joystick directions for ports 1&2, and Port B ($D301) is used on XL/XE for bank-switch control and other outputs. Control registers at $D302/3 configure port directions and are also used for things like enabling the BASIC ROM.
+ANTIC (graphics DMA engine) at $D400–$D40F (and mirrored through $D4FF)​
+ATARIWIKI.ORG
+. This includes DMACTL ($D400) to control DMA and playfield mode, CHACTL, display list start registers (DLISTL/H at $D402–3), screen scroll registers, etc. ANTIC’s registers orchestrate video memory access and can bank into extended RAM for display data in the XE (see below).
+Unused $D500–$D7FF: Some of this space was reserved or used for bank-switch registers. For example, on XL/XE, writing to $D500–$D5FF is used by banked cartridges (as signals to switch ROM banks)​
+GITHUB.COM
+​
+GITHUB.COM
+. Otherwise, $D500–$D7FF has no internal hardware. The self-test ROM (in XL) is physically located in the OS ROM at $D000–$D7FF, but not normally accessible unless bank-switched in (explained next).
+Operating System ROM ($D800–$FFFF): The top 10KB–16KB of address space is typically occupied by ROM. On the 400/800, the OS ROM was 10KB ($D800–$FFFF with gaps), whereas the XL/XE models have a 16KB OS ROM. For XL/XE, addresses $D800–$FFFF include the OS code and font data. The OS ROM contains device handlers (for screen, keyboard, SIO, etc.), the BIOS routines, and the power-on SELF TEST program (though the self-test code is stored at $D000–$D7FF within the ROM chip)​
+ATARIARCHIVES.ORG
+. Normally, the OS ROM is enabled and occupies $D800–$FFFF, except when banked out by certain conditions (e.g., cartridge boot).
+Cartridge/BASIC ROM area ($A000–$BFFF): The 8KB region from $A000 to $BFFF is used for cartridges or built-in BASIC. On an XL, if no cartridge is inserted and the user doesn’t disable BASIC, this region is filled by the 8KB Atari BASIC ROM​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. If a cartridge is present or BASIC is turned off, the BASIC ROM is disabled and this area can be used by cartridge or else reverts to RAM. Additionally, a second 8KB region at $8000–$9FFF is used when a 16KB cartridge is present (16K cartridges overlay both $8000–$9FFF and $A000–$BFFF). The OS determines at boot if a cartridge is present by checking for a signature and initialization vectors at $BFFA–$BFFF​
+ATARIWIKI.ORG
+. If found, the OS will transfer control to the cartridge’s initialization address (the cart’s boot code) instead of booting disk. If no cart, it enables BASIC (unless the Option key held down). Thus the memory in $8000–$BFFF can be variously: RAM (no ROM active), BASIC ROM, or Cartridge ROM, depending on configuration.
+Bank-Switching (XL/XE Extended Memory): The 130XE and later upgrades introduced bank-switched memory to exceed the 64KB limit. The 130XE has 128KB RAM with an extra 64KB accessed in 16KB banks. A special register, PIA Port B at $D301, is repurposed as the Memory Management Unit (MMU) control. In the 130XE, Port B bits 2–5 select the active RAM bank configuration​
+ATARIARCHIVES.ORG
+​
+ATARIARCHIVES.ORG
+. Specifically, bits 2–3 form a 2-bit bank number, and bits 4–5 are enable flags controlling whether the extended bank is mapped for CPU or ANTIC (video) access in the $4000–$7FFF window​
+ATARIARCHIVES.ORG
+​
+ATARIARCHIVES.ORG
+. The 16KB window from $4000–$7FFF can thus be swapped between the normal RAM and one of the up to four 16KB segments of the extra RAM. There are four modes controlled by bits 4 (CPU Bank Enable, CBE) and 5 (Video Bank Enable, VBE)​
+ATARIARCHIVES.ORG
+​
+ATARIARCHIVES.ORG
+:
+Compatibility mode (CBE=1, VBE=1): Bank switching off – the main 64KB RAM is in use for both CPU and ANTIC (acts like an 800XL)​
+ATARIARCHIVES.ORG
+​
+ATARIARCHIVES.ORG
+.
+CPU extended RAM mode (CBE=0, VBE=1): The CPU sees the banked 16KB in $4000–$7FFF (secondary RAM bank mapped for CPU), while ANTIC continues to see main RAM in that region​
+ATARIARCHIVES.ORG
+. Use case: program data in extended RAM, while screen DMA uses main memory.
+Video extended RAM mode (CBE=1, VBE=0): The CPU uses main RAM as normal, but ANTIC DMA for addresses $4000–$7FFF is redirected to the extended bank​
+ATARIARCHIVES.ORG
+. Use case: graphics data (display lists, bitmaps) in the extra RAM, freeing base RAM for code.
+All-RAM (extended) mode (CBE=0, VBE=0): Both CPU and ANTIC are mapped to the extended bank for $4000–$7FFF​
+ATARIARCHIVES.ORG
+. This effectively switches that 16KB completely to an alternate memory. Programmers can rapidly switch banks by changing bits 2–3 (bank select) while these enables are active, to access multiple 16KB segments.
+Aside from extended RAM, Port B bits also control ROM configuration on XL machines. For example, on the 800XL, one of the Port B bits controls built-in BASIC ROM enable. Holding down [Option] at boot clears that bit to disable BASIC (allowing a cartridge or RAM to fill $A000–$BFFF). Another bit (often bit 7 on XL) is used to map the Self-Test ROM. In the 800XL, bit 7 of PORTB when set to 0 will bank out 2KB of RAM at $5000–$57FF and instead map in the OS’s self-test code located in the OS ROM (which physically resides at $D000–$D7FF)​
+ATARIARCHIVES.ORG
+. The OS invokes this during the power-on test if the user holds [Help] or on memory test request. When self-test is done, the bit is set back to 1 to re-enable RAM in that region​
+ATARIARCHIVES.ORG
+. This technique – selectively swapping RAM and ROM – allows the XL/XE to provide extra functionality without dedicated hardware switching circuits. Peripheral Memory Interaction: Typically, peripherals (SIO devices, etc.) do not directly map into the CPU’s address space – they are accessed via device handlers. However, Parallel Bus (PBI/ECI) devices or cartridge devices can map memory. For instance, a memory expansion via PBI might respond to addresses in the $8000–$BFFF range or provide its own ROM at $C000+$. Cartridges obviously place ROM in the CPU memory map. Some cartridges contain bank-switch hardware to page ROM segments in and out. For example, the XEGS 64KB and larger game cartridges use writes to $D5XX to select banks​
+GITHUB.COM
+​
+GITHUB.COM
+ (the write address is decoded by the cartridge hardware, which then switches which 8KB bank of ROM is visible at $8000–$9FFF). This allows games or applications far larger than 16KB. Atari’s OS has no native knowledge of bank-switching; it simply reads from the addresses. The cartridge’s logic ensures the correct data “appears” at those addresses by catching the bank select writes. Some well-known banked cartridges include SpartaDOS X (an 64KB DOS cartridge with switchable banks) and various modern flash cartridges that provide 128KB or more via bank registers. In summary, the XL/XE memory map is a blend of fixed regions (for hardware and OS) and dynamic regions that change based on inserted cartridges, enabled ROMs, or bank-switch bits. Modern upgrades (like the aftermarket 1MB or 4MB expansions) extend this concept further by using unused PORTB bits or even other methods to page additional RAM. For software developers, Mapping the Atari and similar references provide the “canonical” map, and many programs use OS calls to safely switch banks (for example, Atari DOS II and SpartaDOS handle the extended RAM of the 130XE as a RAMdisk or for buffers). Emulators like Altirra emulate these mappings exactly, which helps in testing any new memory-mapped hardware.
+Parallel Bus Interface (PBI) – Direct System Expansion
+The Parallel Bus Interface (PBI) is a 50-pin expansion connector on the back of certain XL models (600XL, 800XL, and the unreleased 1400XL/1450XLD)​
+EN.WIKIPEDIA.ORG
+. It provides a direct, unbuffered connection to the 6502 system bus – essentially exposing address lines, data lines, and control signals externally​
+EN.WIKIPEDIA.ORG
+. Through the PBI, external devices can interface with the computer at the bus level, allowing memory-mapped peripherals, co-processors, or custom I/O that operates at native speed. The PBI was Atari’s answer for more advanced expansions that SIO (serial bus) couldn’t handle due to speed or memory-mapping needs. Electrical Details & Pinout: The PBI is a card-edge connector with two rows of 25 contacts (50 pins total). It carries all 16 CPU Address lines (A0–A15) and all 8 Data lines (D0–D7), plus key control signals: Read/Write strobes, clock, interrupts, etc.​
+EN.WIKIPEDIA.ORG
+. It also supplies power (+5V and ground) and even routes the audio input line (for audio pass-through) and cassette motor control signal. In effect, the PBI is like pulling the 6502 and support chip pins out to a slot. Example signals: Pin 1 is Ground; A0 starts at pin 3, A15 ends at pin 15/16; there are pins for φ2 clock, RESET, HALT, IRQ, Audio In, etc.​
+EN.WIKIPEDIA.ORG
+. Notably, one pin is External Select (EXTSEL) which an external device can use to assert to take over certain bus access. Because these lines are unbuffered, any PBI device must be carefully designed to avoid electrical contention (only drive lines when appropriate, otherwise tri-state). The PBI’s direct bus access means peripherals can achieve much higher throughput than SIO (which maxes ~19200 baud), and can implement memory-mapped features like video or memory expansion. 
+
+Figure: The Atari XL’s 50-pin Parallel Bus connector (top) and the later XE’s split Enhanced Cartridge Interface (ECI) + cartridge connectors (bottom). The ECI provided the PBI signals absent from the standard cartridge port, effectively reproducing a PBI when combined with the cartridge slot​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. Enhanced Cartridge Interface (ECI): The 65XE/130XE dropped the full PBI slot for cost reasons, but Atari introduced the 14-pin “ECI” as a substitute​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. The ECI connector (found beside the cartridge slot on late XE models) carries the subset of signals that were not already on the 30-pin cartridge port. Many address lines and such were duplicated between PBI and cart port, so the ECI adds the missing ones (e.g. the highest address lines A13–A15, audio, etc.)​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. By plugging an expansion into both the cartridge slot and the ECI slot, an XE can access essentially the same bus signals as an XL’s PBI​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. This was used for memory expansions and device interfaces on XE computers (e.g. the 130XE could use a PBI device via an adapter that joined the two connectors). Interfacing and Usage: A PBI device is typically a circuit board or external box that plugs into the port (or via a ribbon cable). Because it can respond to address lines, a PBI peripheral often maps a portion of the CPU’s address space to itself. For instance, the official Atari 1090 XL Expansion System (never released) was meant to house multiple cards that would connect via PBI and map into memory or provide I/O ports. Third-party devices took up the slack:
+The ICD Multi I/O (MIO) board is a famous PBI device that offered a suite of expansions: up to 1MB RAM (as a RAMdisk), a parallel printer port, dual serial (RS-232) ports, and a SCSI hard disk interface​
+EN.WIKIPEDIA.ORG
+. It essentially turned an XL into a full-fledged system with hard drive support. The MIO could map part of its RAM into the Atari’s memory or use DMA via PBI for disk transfers.
+The CSS Black Box (by Computer Software Services) is another PBI/ECI device. It provided a SCSI host adapter for hard drives, a floppy drive controller, a fast serial port (up to 19.2k baud), parallel port, and even a built-in machine language monitor in ROM​
+EN.WIKIPEDIA.ORG
+. The Black Box could attach to either an XL’s PBI or an XE’s ECI+cart; it had an optional pass-through for chaining. It also had an auto boot ROM that would install a DOS or its menu on startup.
+Simpler expansions include the Atari 1064 memory module (which expanded the 600XL from 16K to 64K via PBI) and the SupraDrive (an early 10MB hard disk that connected via PBI)​
+EN.WIKIPEDIA.ORG
+. There were floppy interfaces like the Karin Maxi that let PBI directly control disk drives (bypassing the slower SIO drive electronics)​
+EN.WIKIPEDIA.ORG
+.
+Modern projects have created devices like the IDEa interface (KMK/JŻ IDE) which provides an ATA hard disk interface via PBI/ECI​
+EN.WIKIPEDIA.ORG
+, and external RAM expansions such as the RAM320XL/XE series that give 320KB+ RAM using the bus​
+EN.WIKIPEDIA.ORG
+. These often come with custom software or BIOS patches to utilize the added memory or storage.
+Electrical Considerations: Because PBI devices share the bus, only one device can take the bus at a time. The Atari’s OS supports one PBI device active, and uses an External select (EXTSEL) line as a chip select for PBI devices: when the OS wants to access the PBI device’s memory range or when a PBI device needs to be active (e.g., during DMA or interrupts), that line is used. PBI devices can also issue IRQ or NMI interrupts to the CPU (for example, a clock or serial port on a PBI device might interrupt the 6502 via the PBI). The Atari OS has hooks to detect PBI devices at boot. If a PBI device asserts a certain line at boot (IRQ with EXTSEL, in practice), the OS will jump to a fixed address ($B000) expecting a boot ROM there​
+EN.WIKIPEDIA.ORG
+. Many PBI devices include a small ROM that the OS can use to install new device drivers (similar to how SIO devices could boot their handlers). For example, the Black Box and MIO have initialization ROMs that patch the OS or add new “devices” (like hard disk handler). Third-Party Expansions Examples: To illustrate the capability, consider that the Black Box with its floppy board allowed connecting 5.25” or 3.5” PC floppy drives which the Atari could use as high-capacity disk drives – because the PBI gave direct control, data transfer was very fast (faster than SIO drives)​
+ATARIMAX.COM
+​
+ATARIMAX.COM
+. Another example is the ProtoTyp MFM interface (hypothetical) or other Eastern European projects that connected IDE drives through PBI in the 1990s. The PBI was even used for specialty hardware like the Turbo Freezer (a module that could freeze the system state for cheat/debugging, with ROM monitor and extra RAM) which plugged into PBI/ECI​
+EN.WIKIPEDIA.ORG
+. In summary, the Parallel Bus Interface provides expandability at the hardware bus level. It turned the Atari into a modular system akin to an Apple II or S-100 bus machine, albeit one device at a time. Modern developers leveraging the PBI must carefully manage bus signals and often provide their own device driver code. Many turn to existing PBI device ROMs or open-source examples as templates. The PBI, combined with the cartridge/ECI, has allowed the Atari 8-bit line to grow far beyond its built-in capabilities, from hard disks and network interfaces to massive RAM expansions.
+Cartridge Port – ROM Cartridges and Expansions
+Atari XL/XE computers have a 30-pin cartridge slot for plug-in ROM cartridges. This port (located on top of XLs or the side of XE models) directly connects to the address and data bus, allowing the CPU to execute programs from external ROM. Pin Assignments: The cartridge connector supplies the upper address lines, data lines, power, and control signals to the cartridge. Unlike the 2600’s 24-pin cart, the Atari 8-bit cart is wider: it includes A0–A12 (for 8KB addressing) and extends to A13 if needed for 16KB carts. Two special ROM select lines are provided to bank the cartridge into two possible address regions:
+The “left cartridge” bank (in Atari 400/800 terms) corresponds to addresses $8000–$9FFF, and
+The “right cartridge” bank corresponds to $A000–$BFFF​
+ATARIWIKI.ORG
+.
+On XL/XE with a single cart slot, a 16K cartridge typically ties into both select lines to occupy the full $8000–$BFFF range. An 8K cartridge uses only the $A000–$BFFF range (often the “right” select). The connector pins include these select signals (sometimes labeled CCTL or CART), CPU R/W (so the cartridge can detect writes, used in bank-switching carts), φ2 clock (to latch address lines if needed), +5V, ground, and some input lines like HALT or RESET (the cartridge can hold the CPU in reset or halt if implementing a coprocessor, though this was rarely used). Cartridge Behavior: Cartridges are usually simple ROMs – the CPU addresses the cart region and the cartridge’s ROM responds with data. During a cold boot, the OS checks for a cartridge by computing a checksum of the memory in the cartridge addresses and looking for the initialization vectors at $BFFA/BFFB (for 8K carts) or $BFFE/BFFF (for 16K carts)​
+ATARIWIKI.ORG
+. If the vectors contain a valid start address (pointing into the cartridge’s own memory), the OS will jump to that address, thereby running the cartridge program. This is how game or application cartridges auto-start. If no cartridge is present (bus reads as open), or the user held [Option] to skip BASIC, the OS will proceed to boot from disk or BASIC. The Option Byte at $BFFD (for 16K carts) can tell the OS the type of cartridge (e.g. 8K vs 16K)​
+ATARIWIKI.ORG
+. Memory Access and Conflicts: When a cartridge is active, it typically disables the internal BASIC ROM (if mapped to $A000-$BFFF) and may also disable that portion of RAM. Atari designed the MMU such that when a cart is plugged in and its ROM select line is active, the RAM under $8000–$BFFF is disconnected (so the cart ROM “wins” on the bus). Thus, the cart occupies those addresses. The OS also has a mechanism to disable the OS ROM if a cart needs to use $C000–$FFFF (though standard carts don’t do this, some diagnostic cartridges or OS replacement carts can). The cartridge slot has a HALT line connected: a cart can signal HALT to pause the CPU if it needs to take over the bus (for instance, banking logic). In practice, HALT was mainly used in the 5200 console’s cartridges; Atari 8-bit computer carts rarely assert HALT except possibly during bank switching strobe. Bank-Switching Cartridges: As games grew larger, bank-switching schemes were introduced. A bank-switched cartridge includes additional logic (often a latch or register) that changes which part of the ROM is visible in the CPU address space. For example, one common scheme for 32KB cartridges divides the ROM into four 8KB banks. One bank is fixed at $A000–$BFFF, while the other banks can be mapped into $8000–$9FFF by writing to a control register​
+GITHUB.COM
+​
+GITHUB.COM
+. On the Atari, these control registers are often memory addresses in the $D500–$D5FF range – the cart watches the address bus for writes there. For instance, writing a value to $D500 might select bank0, $D501 selects bank1, etc.​
+GITHUB.COM
+. The OS itself doesn’t know about this; the game’s code running from the fixed bank will intercept writes (often using a trick like writing to $D5xx triggers the bank change and then execution continues in the new bank). The official Atari XEGS cartridges (used in the XE Game System) supported 128K, 256K, 512K sizes with a standardized bank-switch: they use 8KB banks, where the upper 8KB of the cart ($A000–$BFFF) stays fixed to the last bank, and the lower 8KB ($8000–$9FFF) switches among many banks via the $D5xx write (5 bits or 6 bits of the value choose the bank)​
+GITHUB.COM
+​
+GITHUB.COM
+. Many modern cartridges adopt this “XEGS banked cartridge” method for compatibility. Recent Cartridge-Based Expansions: Beyond games and BASIC, cartridges have been used for expansions and utilities:
+The R-Time 8 cartridge (by ICD) is a real-time clock that plugs in and provides time-of-day to the system​
+ATARIMAX.COM
+​
+ATARIMAX.COM
+. It has a pass-through so you can still insert another game or DOS cartridge. The software reads the clock via I/O registers on the cart at certain addresses.
+SpartaDOS X is a cartridge containing a Disk Operating System in ROM along with a CMOS clock and configuration EEPROM. It bank-switches a 64KB ROM to provide a memory-resident DOS and utilities.
+Diagnostic cartridges exist that can bank out the OS and test hardware, or replace the OS entirely (e.g., the “Omnimon” cartridge provides a machine language monitor that overrides certain OS vectors).
+Multi-carts and Flash Carts: Modern developers have created flash-memory cartridges that can store dozens of ROM images and present a menu on the Atari. Examples include the SIDE/SIDE2 cartridge (which not only provides a CF card interface via the cartridge/ECI but also can act as a flash cart for ROMs) and The!Cart (a project providing 1MB of flash with software-selectable banks). These often use CPLDs or microcontrollers on the cart to handle the bank switching logic and sometimes to interface with SD/CF storage for loading new images. They adhere to Atari’s bus timing so that from the Atari’s perspective, it’s just reading a very large “ROM”.
+Pass-through and Stacking: Some cartridge devices (like R-Time 8, or the unattainable 1090XL modules via a cart interface on 600XL) include a pass-through so another cart can be attached. In general, the Atari doesn’t support two simultaneous cartridges in XL/XE (unlike the original 400/800 which had two slots used in specific ways), but pass-through was a convenience for devices that needed to co-exist with a game or DOS cart.
+Memory Access Behavior: Access times for the cartridge are designed to match the 1.79 MHz 6502 bus. The φ2 clock is provided to the cartridge so that address decoding can happen in phase2 of the cycle. If a cartridge needs to insert wait states (for slow memory), it could pull HALT, though typically ROMs were fast enough and no wait was needed. When the cartridge is not being accessed (e.g., CPU running in RAM or OS ROM area), the cartridge’s bus drivers stay inactive. If the user tries to access an address in the cart space that isn’t implemented by the cart, it results in an open bus (usually reading as $FF). The cartridge port, by offering direct bus access, also means other types of devices can be made as cartridges. Examples include memory expansions that bypass PBI and simply plug in as a cart (though this would conflict with normal carts), and even certain specialty hardware: one example is the unreleased Atari 7800 expansion interface which electrically was similar to plugging into the bus (though for the 8-bit line, most expansions went via PBI or SIO instead). In conclusion, the cartridge port remains the simplest way to run code on the Atari. Modern cartridge-based projects mostly involve providing bigger ROM spaces (via bank-switching) or combining ROM with hardware (clocks, storage interfaces). Developers writing software for bank-switched carts must account for switching banks safely (often with small assembly routines in fixed bank areas to handle the switch). Emulators like Atari800 and Altirra have support for common banked cartridge types​
+GITHUB.COM
+​
+GITHUB.COM
+, which is invaluable for testing these without physical hardware first.
+Software Considerations for New Hardware
+Designing new peripherals or expansions for the Atari 8-bit doesn’t end with hardware – one must consider software integration with the Atari’s OS and ecosystem. Key points include how devices interface with the OS’s driver structure, how to provide firmware or handlers, and ensuring compatibility via emulation testing. OS and BIOS Integration: Atari’s OS was built to be modular. Devices like disk drives and printers are accessed via high-level CIO (Central I/O) calls using device names (D: for disk, P: for printer, etc.). Under CIO, a specific Device Handler handles communication. The OS provides built-in handlers for screen, keyboard, SIO devices (via SIOV), etc. For new hardware, developers have two paths:
+Leverage existing handlers/protocols: For instance, a new storage device could emulate a disk drive over SIO. In that case, no new OS software is needed – the device simply speaks the SIO disk protocol, so the existing D: handler works. This is how devices like SIO2SD or FujiNet’s disk emulation work – they pretend to be an Atari 1050 drive, and the OS is none the wiser.
+Install a custom handler: More complex or novel devices (e.g. a network adapter, or a hard disk via PBI) often come with their own disk handler or device driver. The Atari OS allows new handlers to be loaded at runtime. For example, the ICD MIO’s hard disk uses a handler that can be loaded from its ROM or disk, giving a device name (often H: for hard disk). The OS maintains a device table starting at memory address $031A with pointers to each handler’s initialization and I/O routines. A new handler can be added by inserting its entry into this table and hooking the appropriate vectors. Many PBI devices auto-install their handler by having a small bootstrap ROM that the OS executes on reset (via the PBI boot scheme or via a cartridge mechanism) – that code then uses OS calls to add the new handler. If a device is a cartridge, it can simply contain the handler in ROM and use the cartridge init vector to install itself (for example, SpartaDOS X cart installs new D: and H: handlers for its DOS and hard disk functionality upon boot).
+Firmware Development: Modern hardware often contains an on-board microcontroller (for SIO devices or even PBI devices) or programmable logic. Developers must create firmware that respects Atari’s expectations. For SIO peripherals, that means implementing the SIO frame protocol accurately (timing, checksums, device codes). Projects like FujiNet provide open source firmware that handles dozens of SIO commands – writing similar firmware requires a deep understanding of SIO states (command phase, data phase, acknowledgments). Documentation like “Atari Serial I/O Protocol” and code from existing devices can guide this. On the PBI side, if developing say a PBI NIC or memory card, the firmware or logic might need to monitor address lines and respond within microseconds to CPU read/writes. This often means using CPLDs/FPGAs for PBI projects to meet timing, or heavily optimized ISR code if using a microcontroller. For devices that expose new functionality, writing the Atari-side software is crucial. Example: a WiFi modem on SIO (like FujiNet’s virtual modem) still relies on an Atari terminal program or a handler (the FujiNet provides an N: network device handler) to be usable​
+FUJINET.ONLINE
+​
+FUJINET.ONLINE
+. Thus, the peripheral designer often also provides an Atari driver or BIOS extension. In the 1980s, these were often written in assembly and stored on ROM or disk. Today, one could write them in C using cross-compilers (e.g. using CC65 to write an Atari DOS driver). Either way, understanding the Atari OS vectors (see Atari OS manuals or Mapping the Atari) is key. For instance, a disk device handler must implement the commands CIO will call (open, close, get byte, put byte, status, etc.) and interface with the hardware either via SIO calls or memory registers. Emulation for Development: Testing new hardware on real machines can be time-consuming, so the rich Atari emulator environment is extremely helpful. Notably, Altirra (a modern Atari 8-bit emulator) supports emulating many expansions and custom devices. Altirra can emulate expanded RAM, various PBI devices (like MIO, Black Box, IDE interfaces), the XEP80 80-column, and more​
+VIRTUALDUB.ORG
+​
+VIRTUALDUB.ORG
+. It even allows mounting custom ROMs for cartridges or PBI. For example, a developer working on a new 1MB cartridge can define the bank-switch scheme in Altirra, load their ROM, and test how their software runs, all before producing any PCB. Altirra’s debugger lets you inspect OS calls, trap SIO commands, and measure timing – invaluable for debugging protocol issues. Emulators also simulate the exact video and DMA timing, which is important if your hardware relies on cycle timing (e.g. a device that uses ANTIC fetch cycles for data transfer). Another tool, the Atari800 emulator, supports many cartridge types and some custom OS ROMs, though Altirra is known for extremely detailed hardware fidelity. The Altirra Hardware Reference Manual documents how to configure custom device images. For SIO, some emulators let you “pipe” the SIO traffic to host OS – for instance, Altirra and others have virtual SIO drives or can interface with real SIO devices via PC parallel port adapters. This means you could potentially hook your prototype hardware to an emulator to test interactions. There are also SIO test suites and logic analyzers scripts shared in the community to validate that your device responds within the required 1 bit-time (~52 microseconds at 19.2k) to SIO control signals. OS Constraints and Compatibility: When developing new hardware, one must also consider the Atari’s OS constraints. For example, the OS uses some page-zero locations for itself; if your device’s handler is too large, it might clash with OS memory (common issue: a handler that uses more memory than expected might collide with DOS buffers). Additionally, different Atari models have slightly different OS versions (400/800 OS vs XL OS vs XEGS OS). A modern expansion should ideally work across these or detect them. The 1200XL is a special case with some OS differences in handler initialization. Developers nowadays often test their hardware under multiple OS ROMs in emulation. Development Ecosystem: Modern firmware for Atari peripherals can be developed with contemporary tools – e.g. an Arduino-based SIO device can be coded in C++ using the Arduino IDE, taking advantage of libraries for UART or SPI if needed (though SIO is bit-banged). For PBI, if using an FPGA, one might use VHDL/Verilog and simulate the 6502 bus to verify the device responds correctly to reads/writes. On the Atari side, cross-assemblers (MADS, CA65) and cross-compilers help build ROMs or handlers. The community has also produced open-source replacements of the Atari OS (like Altirra BIOS, which is a reimplementation of the OS)​
+VIRTUALDUB.ORG
+ – studying these can help understand how the OS expects devices to behave. Example – Hard Disk Device: To illustrate software considerations: suppose we’re making a PBI hard-disk interface. Hardware provides an IDE connector and maps a register at $D1E0–$D1E7 for drive control. Software-wise, we need an H: device handler in Atari DOS. We could write a boot ROM that sits at $D1A0–$D1BF (for instance) and when the computer resets, our device asserts EXTSEL and the OS vectors to our init code. Our code hooks into CIO, adds an H: handler vector, and perhaps intercepts the disk boot process to allow booting from the hard drive. We’d implement the SIO commands for H: (which might piggyback on D: commands or define new ones). Without writing this software, the hardware would sit idle because Atari DOS would not automatically know how to use an IDE drive. This example underscores that hardware and software are co-designed in this platform. Finally, compatibility and testing: any new peripheral should be tested with common software. For instance, if one designs a new sound device (say a covox digitized audio on PBI), how will software use it? It might require creating demos or modifying games to output to it. In contrast, a new memory expansion should be tested with known memory test programs and OS functions to ensure it doesn’t break anything. Emulation can run these tests quickly. Altirra’s extensive support for expansions (even accelerators and 65C816 upgrades) indicates many developers use it to iterate on designs​
+VIRTUALDUB.ORG
+. In conclusion, developing new Atari hardware involves understanding the 8-bit’s “contract” with peripherals: the handshake of SIO, the memory map for PBI/cart, and the software handshake with the OS. Thanks to decades of community reverse-engineering and modern emulators, we have the information and tools to create expansions that the original Atari engineers never imagined, all while integrating smoothly into the beloved Atari OS environment.
