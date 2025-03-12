@@ -1,0 +1,576 @@
+Designing a PBI/ECI-Based Centralized Disk-Sharing Hub for Atari XL/XE
+1. PBI/ECI Interface Design & Implementation
+PBI/ECI Port and Signals
+The Parallel Bus Interface (PBI) is a 50-pin expansion port on Atari 600XL/800XL computers that exposes the 6502’s system bus lines directly​
+EN.WIKIPEDIA.ORG
+​
+ATARIMAGAZINES.COM
+. It provides all 16 address lines (A0–A15) and 8 data lines (D0–D7), as well as CPU control signals (clock, read/write, interrupts, etc.) on an unbuffered connector​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. The Atari XE series (65XE/130XE) introduced the Enhanced Cartridge Interface (ECI) – a smaller 14-pin port that, when used together with the standard 30-pin cartridge slot, replicates the full PBI signals​
+EN.WIKIPEDIA.ORG
+. In practice, an ECI device plugs into both the cartridge slot and ECI port to access the same bus lines as PBI. Key PBI Signals: The PBI provides a Phase 2 (φ2) clock output (the 1.79 MHz system clock), the CPU R/W line (latched as “Latch read/write out”), interrupt lines (IRQ), a READY input to insert wait states, a special External Enable/Select line to activate external devices, and a Math Pack Disable (MPD) input to bank out the internal math ROM​
+EN.WIKIPEDIA.ORG
+​
+ATARIMAGAZINES.COM
+. All these are in addition to the address and data buses. For example: when the Atari accesses an address reserved for PBI, it asserts the External Enable (EXTENB) signal, indicating an external device should respond​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. If the access is to the device’s ROM area, the device then raises MPD to disable the Atari’s internal math ROM, avoiding bus contention​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. The READY line (6502 RDY) is available on PBI and allows an external device to pause the CPU—useful for stretching cycles if the device isn’t ready to complete a data transfer​
+EN.WIKIPEDIA.ORG
+. Because the PBI lines are direct and unbuffered, any device connected must not overload them​
+ATARIMAGAZINES.COM
+. The Atari can only drive a limited load, so the interface hardware should present high impedance when not active and use its own drivers when putting data on the bus.
+Level Shifting and Electrical Interface
+Atari 8-bit computers use 5V TTL logic levels on the bus, whereas the ESP32 and modern logic operate at 3.3V. Direct connection is unsafe, so level shifting bus transceivers are required​
+FORUMS.ATARIAGE.COM
+. A common solution is to use 5V-tolerant bidirectional bus transceivers like the 74HCT245 (8-bit) or 74HCT* or 74LS* series buffers. For example, an 8-bit transceiver can interface the data lines: with V<sub>CC</sub>=5V, it will recognize 3.3V from the ESP32 as a valid high (HCT series has TTL-level inputs), and it can drive the bus with 5V outputs. The transceiver’s direction pin would be controlled by the 6502’s R/W line, and its output-enable controlled by the EXTENB (External Select) signal. This way, the Atari’s data bus and the ESP32’s data pins are only connected when the Atari is addressing the device. When the device is inactive, the transceiver is in high-Z mode so as not to interfere with normal operation. Similarly, address lines (which are output-only from the Atari) can be level-shifted down to 3.3V using simple buffers (e.g., a 74LCX573 latch or 74HC4050 buffers). The ESP32 will then see valid 0/3.3V logic for addresses. For control lines like φ2, EXTENB, IRQ, and READY, use appropriate converters or 5V-tolerant inputs/outputs (the ESP32’s input pins would need a divider or buffer since they aren’t 5V tolerant). Often, a resistor network or dedicated translator (e.g., 74LVC245, which supports 5V on inputs when powered at 3.3V) can be used for one-directional signals. In summary: ensure all 5V lines from Atari are stepped down to 3.3V for the ESP32, and any 3.3V outputs to Atari are stepped up or driven at 5V logic levels. Bus Transceiver Direction Control: The 6502’s R/W line determines the data flow. When the CPU performs a write (R/W=0), the Atari places data on the bus, so the transceiver should pass data from the Atari side to the ESP32 side. On a read (R/W=1), the device must drive data onto the bus for the CPU to read. The PBI provides a latched R/W (pin 46) that is valid during φ2 high​
+EN.WIKIPEDIA.ORG
+. This R/W signal can drive the DIR pin of the 74HCT245. The EXTENB (External Enable, pin 2) can be used to gate the output enable (OE) of the transceiver, so that the device only drives the data bus during an actual external access cycle​
+ATARIMAGAZINES.COM
+. For example, when the Atari addresses the device’s data register and R/W=1 (read), the logic would enable the transceiver outputs (connecting ESP32->Atari) and set direction to device-to-Atari, allowing the ESP32 (via the transceiver) to put a byte on D0-D7. If the Atari is writing (R/W=0), the transceiver direction flips to Atari-to-ESP32, and the ESP32 can read the data lines. In all other cases (no external access), the transceiver’s OE is disabled, isolating the ESP32. This prevents any bus contention with other devices or the Atari’s internal hardware. ECI Connection: For 130XE/65XE users, the design would include an adapter that plugs into the cartridge slot and ECI port simultaneously (often a single board that straddles both). The 14 ECI pins provide the higher address lines and a few control signals missing on the cart port​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+. Electrically, the same level shifting considerations apply. The adapter would route the combined PBI-equivalent signals into the hub’s transceivers. (In many cases, existing PBI devices like the ICD Multi I/O or IDE interfaces had a dual connector for XE machines – our hub could do the same, or offer a PBI cable for XL and a cart+ECI cable for XE.)
+Bus Arbitration & Memory-Mapped Access
+The PBI allows memory-mapped I/O with the Atari’s CPU at full speed. In the Atari memory map, certain addresses are reserved for parallel bus devices. When a PBI device is present, the OS will bank out its internal floating-point ROM ($D800–$DFFF) and use that address range for the device’s ROM and vectors​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. Also, a block of addresses in the $D1xx range is used for device registers. According to Atari’s specs, the external device must decode the following address regions​
+ATARIMAGAZINES.COM
+:
+$D8xx–$DFxx (Device ROM): 2 KB space where the external device’s ROM (with driver code and identification) resides. When the Atari accesses this range and the device is enabled, the external ROM responds, and the Atari’s internal Math Pack ROM is disabled via MPD​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+.
+$D1xx (Device registers): 256 bytes for I/O registers of the device. The device can map control/data registers here (typically it won’t use the whole 256 bytes, just a small subset). Accesses in this range, when the device is enabled, will be responded to by the external hardware (or ignored if not the device’s assigned addresses).
+$D1FF (Device select latch): This is a special address used to enable or disable external devices​
+ATARIMAGAZINES.COM
+. Writing to $D1FF doesn’t go to the device in a normal sense; it sets or clears a latch that indicates whether the device is active. The Atari supports up to 8 parallel bus devices, and uses a bitmask for selection​
+ATARIMAGAZINES.COM
+. Bit 0 corresponds to device 0, bit 1 to device 1, etc. When the OS wants to talk to a specific device, it writes a value with the corresponding bit = 1 to $D1FF, which sets the latch in that external device​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. Only the device whose ID matches will latch that bit (e.g., device 0 latches D0). This asserts EXTENB to that device, allowing it to respond to $D1xx/$D8xx addresses. Writing a 0 to $D1FF will clear the latch (device no longer selected)​
+ATARIMAGAZINES.COM
+. The latch output is also used to gate the MPD signal (so MPD is only asserted when the device is enabled and the address is in $D8xx-$DFxx range). The OS writes 0 to $D1FF when done to re-enable the math ROM and free the bus for others.
+Device ID and Arbitration: In a 1090XL expansion chassis (Atari’s never-released multi-slot expansion), each slot/device would be assigned an ID 0–7 (often via a jumper). The OS device manager checks each ID in turn during boot​
+ATARIMAGAZINES.COM
+. For our design, we effectively will use Device ID 0 for each Atari connected, since each Atari has its own independent interface. (Each Atari thinks it has “device 0” on its parallel bus – this is fine because the machines are not sharing a single bus; the hub handles arbitration separately, as discussed later.) The Atari OS Generic Parallel Handler (built into the OS at $E48F) can manage up to 8 devices, indexed by those ID bits​
+ATARIMAGAZINES.COM
+. During cold boot, the OS polls for external devices by enabling each ID in turn and looking for a valid handler table in the $D8xx ROM space​
+ATARIMAGAZINES.COM
+. So our device’s ROM must provide the correct identification bytes and vectors. Once the OS recognizes the device, it uses the provided driver to handle I/O calls. Whenever the OS or user program needs to access the device, it will set the appropriate bit in the DEVSEL register (write to $D1FF) to enable the device, perform the memory-mapped I/O operations (reads/writes to $D1xx or executing code in $D8xx space), then write 0 to $D1FF to release it​
+ATARIMAGAZINES.COM
+. This ensure that only one device (per machine) drives the bus at a time and that the Atari’s normal ROM is restored when the device is idle. CPU-Polled I/O vs Bus Mastering: The standard way to implement an Atari PBI device is as a CPU-interfaced peripheral, meaning the 6502 CPU in the Atari reads and writes the device’s registers (just like it would interact with POKEY, ANTIC, etc.). This is simpler and leverages the OS’s handler infrastructure. The CPU can reach very high speeds this way – the PBI has been demonstrated to transfer ~100 KB/s with optimized code​
+ATARIMAGAZINES.COM
+. However, it does consume the CPU’s time during the transfer. The alternative is to design the device as a bus master that can perform DMA (Direct Memory Access). In a DMA scenario, the external device would take control of the address/data bus and transfer data to or from Atari memory without the CPU moving each byte. The Atari’s bus design allows this in principle – for instance, the ANTIC coprocessor does DMA for video memory. An external device could use the READY line or even the HALT line (not explicitly on PBI, but READY effectively halts the CPU) to pause the CPU, then put addresses and data on the bus, pulsing φ2 to write to RAM. This approach could achieve higher throughput and free the Atari CPU for other tasks during disk transfers. However, it’s much more complex: the device must coordinate with ANTIC (to avoid clashing with video DMA), handle bus arbitration carefully, and mimic 6502 bus timing. Chosen Approach: For the initial design, we focus on direct memory-mapped access with the Atari CPU handling the transfer, as it’s simpler and already quite fast. Using the OS’s generic PBI handler means we don’t have to patch DOS heavily – the device will integrate into the OS as a disk-like handler. We will design the hardware to optionally support cycle extension via READY, which can be used to insert wait states if the ESP32 needs a little extra time to fetch data. This ensures reliable operation at high speed without overrunning the ESP32’s responses. Later, one could experiment with a DMA mode (bus mastering) for even better performance, but that would require additional bus control logic (for example, asserting EXTENB and then driving the address lines from the ESP32 side, etc., which likely calls for a CPLD/FPGA or very tight microcontroller timing). In summary, the PBI/ECI interface will be implemented with proper level shifting and bus transceivers to protect the ESP32 and Atari, and we’ll operate as a memory-mapped device using the Atari’s normal parallel bus protocol. The Atari’s OS will recognize our device via a ROM and use its generic driver to communicate, issuing memory reads/writes to perform disk sector transfers.
+2. Network Topology & Physical Layer
+Multi-Atari Connection Topology
+To connect up to 8 Atari computers to one central hub, a star topology is used. Each Atari connects to the ESP32-based hub via its own cable and PBI interface. In other words, the hub will have 8 ports (or a way to plug in 8 PBI cables), one per Atari. This is crucial because the Atari PBI buses cannot simply be wired together in parallel (each computer has its own independent bus and timing). The hub’s job is to service one Atari at a time (or timeslice between them) and provide the illusion of concurrent disk access. By giving each Atari a separate connection, we avoid electrical bus conflicts between multiple computers. The ESP32 will act as a central arbitration point to manage these separate connections. Using a separate cable per Atari also allows us to use standardized cables for convenience. Ethernet (Cat5/Cat6) cables are a good choice: they are inexpensive, readily available, and contain 8 conductors (4 twisted pairs) which is enough for the necessary signals. We’re not using any Ethernet protocol – instead, the wires will carry the raw PBI signals (in a somewhat simplified form). The twisted pairs can help reduce noise and crosstalk for certain signals. An RJ45 connector on the hub and a small adapter at the Atari’s PBI port (or a direct PBI plug with an RJ45 pigtail) could be used.
+Cable Signal Allocation
+We need to allocate the 8 wires in the cable to carry signals between each Atari and the hub. A possible allocation is:
+4 wires for Data lines (D0–D7): We can send 8-bit parallel data over 4 twisted pairs by using two wires per nibble, but that doubles up signals and isn’t ideal. Instead, it may be better to use all 8 lines for data in parallel (which would use the entire cable for data alone). However, that leaves no lines for control. Since we do need control lines, a more efficient approach is to time-multiplex or serialize some signals. But given the speed requirement, pure serialization would be too slow. Instead, we compromise: not all 16 address lines need to travel over the cable, because the device can be designed to latch addresses on the Atari side or decode them with a small microcontroller/logic at the Atari end. To minimize cable lines, we can place a tiny microcontroller or latch at the Atari connector that listens to the Atari’s bus and then sends a simplified command over the cable to the hub. (For example, this microcontroller could detect “Atari requested read of sector X” and then send that info serially to the hub.) This would require active electronics at each Atari, which complicates things slightly but drastically reduces cable width.
+Alternatively, if we aim to keep the design passive at the Atari end (no active electronics except level shifters), we will need more wires. Let’s assume a moderately slim approach: use the cable to carry an 8-bit data bus, a few control lines, and rely on the hub to capture the address during the bus cycle. Since the Atari’s bus cycles are short (~2 MHz), sending all address bits over the cable in real-time is challenging. Instead, we use φ2 and EXTENB to latch the address at the Atari side into a register (as part of the interface hardware), then send the latched address to the hub perhaps over the same 8 data lines in two halves (high byte and low byte) if we serialize quickly, or use a separate multiplexer. For simplicity in this conceptual design, we can assume the cable carries: 8 data lines, 1 or 2 control lines, and a ground reference (possibly using one or two wires as ground return). One feasible mapping: use one twisted pair for D0/D1, one for D2/D3, one for D4/D5, one for D6/D7 (each pair has one data and one ground, or two data lines that toggle inversely to reduce noise). The control signals needed are φ2 (clock) and perhaps a combined “address strobe” or EXTENB line. If we use φ2 as a synchronizing clock over the cable, the hub can latch/interpret data at the right phase. Another pair could carry φ2 and GND. EXTENB could be transmitted on another line or we could infer it by sensing when the address on the bus is in our range (but that is complex to do remotely). It’s safer to explicitly send a signal when the device is selected. So, allocate another wire for EXTENB (or a signal that indicates “this cycle is for you”). The READY line needs to go back to the Atari; this could potentially share a line (open-collector) with other signals if carefully managed, or occupy another wire. To sum up a possible pinout for the RJ45 per port:
+Pin 1-8: D0, D1, D2, D3, D4, D5, D6, D7 (8 data lines).
+Pin 4 (if repurposing one data line for control when needed) or an additional small connector: EXTENB.
+One of the twisted pairs: carry φ2 (on one wire) and READY (on the other wire of the pair). Alternatively, φ2 and GND on a pair, and use one of the data lines itself for READY when driving it (since READY is usually low to insert wait, it could be an ORed condition on one data line – but that’s a bit hacky).
+However, a more elegant approach: use two RJ45 cables per Atari (16 wires) – one for the 8 data bits and ground, another for address/control. But that doubles the cabling. Instead, many designs would incorporate a microcontroller or FPGA at the hub to which all Atari signals are directly wired (no intermediate micro at the Atari end). This requires a lot of pins but is doable if we use an IO expander or multiplexer. For the purposes of this design, we will assume each Atari’s critical signals (D0-7, φ2, R/W, EXTENB, READY) are carried to the hub, either through a single multi-core cable or a combination of cable and local latching. An Ethernet cable with 8 wires can carry D0–D7, and we can use an additional thin cable or a second RJ45 for the control lines. If using a single cable, we might multiplex address lines over the data lines in two steps (address high byte first, then low byte) during an address phase, then use the data phase for actual data – essentially creating a simple protocol over the cable. This starts to resemble a custom bus protocol rather than sending every bus line directly. Custom Physical Protocol: To minimize overhead while using the cable efficiently, the Atari interface and hub can implement a basic time-division protocol:
+When the Atari wants to perform a disk I/O, its PBI device logic (inside our interface) will recognize the access (via EXTENB and address decoding). Instead of directly putting that on a long cable in parallel, the interface can package the request into a few bytes and send it to the hub. For example, “READ sector 1234 from drive 1” could be encoded into a short message. The hub receives this, fetches the data, then sends back the 128-byte sector data through the cable to the Atari interface, which in turn feeds it to the Atari bus. This resembles a tiny network packet, but it’s all our own protocol – not IP or Ethernet, just a raw frame over the cable.
+One could use an SPI-like or UART-like serial link over the cable to reduce wires: e.g., one pair for clock and data out, another for data in and ground. But achieving 127 KB/s transfer with serial links requires a few Mbps throughput plus overhead. It might be possible with high-speed UART (e.g., 2 Mbps) or SPI at, say, 4 MHz clock, but then our latency per byte increases (each Atari byte becomes a serial stream of bits).
+Since the goal is maximizing speed, a parallel approach is beneficial despite needing more wires. The custom protocol can still use parallel 8-bit transfer but repurpose the bus lines for different elements of a transaction in phases.
+One simplified approach for the physical layer: use the cable to extend a simple bus with the following lines:
+8 data lines (used to send addresses, data, commands in different phases).
+1 strobe line (to indicate when a byte on the data lines is valid – could be φ2 or a separate “data valid” line).
+1 direction indicator (or use the nature of the operation to infer direction).
+1 or 2 ground lines (to ensure stable references; using one of the twisted pairs entirely as ground return can help signal integrity).
+For instance, the Atari interface could latch the address of a register access and then put, say, the sector number on the data lines, toggle a strobe to send it to the hub, then put a command code on the lines, etc. This effectively turns the communication into a command/response exchange over the cable. The advantage is that we don’t need all address lines continuously on the cable, only the information that matters (like which sector to read/write, which drive, and the actual data). This reduces required lines and bandwidth usage.
+Electrical Considerations for Cabling
+Using an Ethernet cable (twisted pairs) for a parallel bus means we should consider signal integrity:
+Twisted Pairs: Typically, Cat5 has pairs like 1-2, 3-6, 4-5, 7-8 as pairs. We might assign one signal and ground to a pair wherever possible, to minimize crosstalk. For example, pair (1,2): D0 and GND, pair (3,6): D1 and GND, etc. Or pair signals that are complementary or not simultaneously switching. If we had a dedicated clock, pairing clock with ground is good practice. The φ2 1.79MHz clock is relatively low frequency and can be used as a sync, but if we use a higher-speed custom clock for data bursts, that might be on the order of a few MHz as well. Twisting with ground helps maintain signal quality.
+Termination: For a cable of a few feet, the 1-2 MHz signals should transmit fine without complex termination, but reflections could occur. A series resistor (maybe ~100 Ω) in line with signals at the driver end can dampen ringing. Because the Atari bus already has some source impedance and the transceivers add a bit more, we may not need much extra. It’s something to verify on a prototype (e.g., with an oscilloscope).
+Grounding: All connected Atari machines and the hub must share a common ground via the cable to ensure signal reference. This means the ground pin on each PBI (pin 1, 10, etc.) should tie into the cable’s ground wires. With multiple machines, there’s a possibility of ground loops (if they are plugged into different mains outlets). In practice, the ground difference over short distances is usually small, but it’s wise to have only one of the machines or the hub supply the reference ground to avoid currents circulating. In our star topology, the hub will connect all grounds together. This is generally fine – in fact, Atari’s SIO network similarly shares ground among devices. Just ensure the ground connections in the cable are low resistance. We can dedicate at least one full twisted pair to ground (both wires ground) to increase the ground return cross-section.
+Power over Cable: The Atari’s PBI provides +5V output that can source some current (to power small expansion devices). It’s conceivable to send +5V from each Atari over the cable to the hub or vice versa, but that raises complications. We likely won’t send power between Atari and hub except maybe to power interface logic at the Atari connector. The ESP32 hub will have its own power (it could be powered by a single Atari’s 5V, but if 8 machines are connected, drawing power from all of them is not ideal). A safer plan is an independent 5V supply for the hub and just tie the grounds. The interface at each Atari might take a tiny bit of 5V from that Atari to power its level shifter chip (which is fine and isolated per machine), or use the hub’s 5V delivered through the cable if we design it that way. If using the hub’s 5V over cable, include protection (fuses or diodes) to prevent backfeeding multiple Atari 5V lines into each other.
+No TCP/IP Overhead: To be clear, we are not running Ethernet protocol. The use of Ethernet cable is purely physical. We avoid any overhead of packets, MAC addresses, etc. This keeps the communication efficient and deterministic. The protocol is essentially a custom parallel/serial hybrid that we design specifically for disk sector transfers.
+By using a direct cable connection for each Atari, we essentially create a private high-speed link for disk data. The ESP32 hub will orchestrate these links, making sure only one Atari’s link is active on the hub’s internal bus at a time (if needed), similar to how a SCSI controller might arbitrate multiple devices – but here the “devices” are multiple computers. The network topology is centralized (hub-and-spoke). This has the benefit that each branch is isolated – an electrical fault or noise on one cable ideally won’t disturb the others, and one Atari crashing or rebooting won’t affect the others except for perhaps file system issues on the shared disk (addressed separately).
+Hub Arbitration of Multiple Ataris
+While each Atari has its own cable and interface, inside the hub the ESP32 must deal with concurrent requests. The Atari CPUs run independently, so two or more may attempt disk access at the same time. The hub must arbitrate these so it services them one at a time or interleaves safely. On the physical layer, this is handled by using the READY line per Atari to stall those that can’t be serviced immediately. For example, if Atari 1 and Atari 2 both issue a request, the hub might service Atari 1 immediately and hold Atari 2’s READY low (preventing Atari 2’s CPU from completing the I/O operation) until Atari 1’s transfer is done. Then it releases Atari 2 and handles its request. From the users’ perspective, both operations complete, just that one was delayed a few milliseconds (which is usually unnoticeable). This is analogous to how a multi-tasking OS schedules processes – here the hub schedules disk IO from multiple computers. In hardware, this means the hub’s logic (ESP32 or an FPGA) needs to monitor each EXTENB/Device Select from each Atari. If two go active at once, pick one and immediately assert the other’s READY to pause it. Because the PBI bus cycles are very fast, this logic likely needs to be implemented either in a small CPLD/FPGA or using the ESP32’s gpio interrupts with very low latency. The ESP32 might not be able to reliably respond within a fraction of a microsecond in software, so adding a bit of glue logic that automatically pulls READY low on contention is a good idea. One approach: have a priority encoder that, when multiple EXTENB signals from different ports are active, drives READY low on the lower-priority ones. Priority could be fixed or round-robin. Given the low probability of exact simultaneous access, a simple fixed priority (e.g., Port1 > Port2 > …) is fine; the impact is negligible. Additionally, because each Atari’s interface is independent, we ensure that the data lines are not tied together across ports. Each port has its own transceiver. So there is no risk of cross-talk between data buses of different Ataris – they only meet inside the ESP32 (which handles them time-wise, not by electrical connection). This isolation is important to prevent one Atari from driving another’s bus. In summary, the network topology uses point-to-point links (Atari-to-hub). The physical layer is a custom parallel/serial hybrid over an 8-wire cable, emphasizing efficiency and low latency. We sacrifice the formality of a standard network protocol to meet the 8-bit computers’ timing needs and achieve high throughput. The ESP32 hub serves as the central switch, ensuring each Atari’s requests are processed and managing any simultaneous access via READY-based flow control.
+3. ESP32 Hub Hardware & Software Architecture
+Hub Hardware Components
+ESP32 Microcontroller: The heart of the hub is an ESP32, a 3.3V dual-core MCU with built-in Wi-Fi (which could be leveraged for future enhancements like networked disk images or remote management, though not required for basic operation). The ESP32 has decent performance (240 MHz, fast GPIO access, DMA capabilities) and can handle file systems on SD cards. It has around 30+ GPIO pins available, which is borderline for directly connecting to 8 Atari ports, so we will likely incorporate some external I/O expansion or multiplexing logic. It does have some interesting peripherals (like the I2S interface) that can be repurposed to handle parallel data output, which might help in pumping data out at a high rate. Level Shifters & Bus Buffers: Each Atari port on the hub will have a similar set of interface chips as described in section 1:
+An octal bus transceiver (74HCT245 or similar) for the 8 data lines.
+A latch or buffer for address lines (if we choose to capture address lines fully).
+Line drivers/receivers for control signals (e.g., a 74HCT14 Schmitt trigger inverter or 74LS07 open-collector driver for READY/IRQ lines to safely interface).
+Possibly a small CPLD or a decoder to manage selecting which port’s transceiver is active on the ESP32 side at a given time.
+Because the ESP32 cannot directly handle 8×(8 data + address + control) = dozens of signals at once, multiplexing hardware is key. One strategy is to use a time-multiplexed bus on the ESP32 side. For example, an 8-to-1 multiplexer for the data lines: only one Atari’s data bus is connected to the ESP32 at a time (the others can be tri-stated). The ESP32 can select which one via some address lines to the multiplexer. Similarly, address latches from each port could feed into a multiplexer. Alternatively, a CPLD/FPGA can aggregate all ports: it could present the ESP32 with one set of address/data lines plus an ID for which port is currently requesting service. In fact, this could be integrated with the arbitration logic: the CPLD can monitor all ports, and whenever any need attention, it could interrupt the ESP32 and provide the port ID and maybe the address/command. However, to keep the design in microcontroller terms: we could connect, say, the 8 data lines of all ports to 8 ESP32 pins but through tri-state buffers. Each port’s buffer is enabled only when that port is being serviced. This might be done by the ESP32 itself driving an enable pin low for the chosen port and high for others. Address lines could be handled similarly or time-shared if using fewer pins. The EXTSEL/Device Select line from each port can be tied to an ESP32 input (that’s up to 8 inputs just for EXTSEL). These can trigger interrupts to tell the ESP32 “hey, Atari #3 is trying to talk.” If using an SD card, the ESP32 will communicate with it via SPI or SDMMC interface. This uses a few dedicated GPIOs, which we must account for but it’s only 4-6 pins. We should leave those aside and not count them against the 30 or so for PBI connectivity. Memory/Storage: The hub will have a storage medium to hold disk images:
+Likely an SD card slot (since ATR images can be a few hundred KB to a few MB each, and we might have many of them for different virtual disks). SD cards are easy to interface (SPI mode or 4-bit SD mode) and can achieve high throughput (several MB/s, easily above what we need for 127 KB/s * 8 ~ 1 MB/s total worst case).
+Alternatively, an SPI flash chip (like a 16MB flash) could store a handful of ATR files, but it’s less flexible for the end user than an SD card that can be removed and loaded with images on a PC.
+The ESP32’s internal flash (typically 4MB) is mostly for program storage; we wouldn’t want to wear it out with disk image writes. So an external storage is preferred for the ATR data.
+Port Connectors: For each Atari, the hub might have an RJ45 jack or a pin header where the Atari’s cable plugs in. Internally, each of those ports connects to the transceiver/latch logic then to the ESP32 (or CPLD). There should also be some indicator LEDs or so (optional) to show activity per port (like a LED that blinks when an Atari is accessing disk, just like old disk drive LEDs – purely user feedback). Power and Voltage Regulation: The ESP32 requires 3.3V. We will likely have a 5V input (maybe from a USB power supply or from one Atari’s PBI 5V line if we trust it). A regulator (AMS1117-3.3 or a buck converter) will produce 3.3V for the ESP32 and digital logic. The bus transceivers that interface with 5V will run at 5V on their Atari-facing side. Chips like 74HCT245 have dual-supply only in one sense (they use one Vcc). We plan to power the HCT245 at 5V so that its outputs to the Atari are 5V. Its inputs coming from the ESP32 (3.3V) will register correctly as high because 3.3V > 2V (TTL high threshold). This avoids the need for a separate level shifter on control signals from ESP32 to the transceiver chips. The latch (if 74HC573 or similar) can also be run at 5V, latching addresses from Atari (5V signals, which HC/HCT can input) and then outputting 5V levels – those outputs would go into either a 5V-tolerant multiplexer or directly into 5V-tolerant ESP32 inputs (the ESP32’s GPIOs are NOT 5V tolerant, so we must not feed 5V to them). So likely, after latching address, we’d use a 74HC4050 (which is a hex buffer that can shift 5V inputs down to 3.3V when powered at 3.3V) or use resistor dividers on the address lines into ESP32. Since address lines can be numerous, a better method is to use an intermediate device (like an I/O expander or the CPLD) powered at 3.3V but able to read 5V inputs. One approach is to use an FPGA/CPLD like in the tangential project (they used an Altera MAX10 FPGA)​
+GITHUB.COM
+. That FPGA could be 3.3V I/O but 5V tolerant on inputs (some are, or you’d still need level translators). It could handle all the bus gating and present a nice interface to the ESP32 (e.g., an SPI or parallel FIFO interface the ESP32 uses to get commands). This offloads the real-time requirements. Given the question, however, the focus is on using the ESP32 as the hub, so we can mention an FPGA as an option but will try to keep the design doable with mostly logic chips and the ESP32’s capabilities.
+ESP32 Firmware Responsibilities
+The ESP32 will run firmware that essentially turns it into an intelligent disk controller serving multiple hosts. The major responsibilities of the firmware include:
+Managing ATR disk images: Opening image files from SD, reading/writing sectors to them on demand. Possibly handling multiple images per Atari (for private drives) and one common image (shared drive).
+Implementing the sector-level protocol between each Atari and the hub: interpreting commands from the Atari (like “read sector X of drive Y”) and responding with the requested data or status.
+Ensuring mutual exclusion and data consistency for shared resources: if two Ataris access the shared image, the firmware must serialize writes and possibly coordinate read vs write to avoid one reading half-updated data.
+Performance optimization: using double buffering, caching, or parallel processing (ESP32 has two cores, so one core could handle file I/O while the other manages the bus interface, for example) to achieve the desired throughput.
+Storage Handling: We’ll use a straightforward approach where each drive (partition) corresponds to a file (ATR image) on the SD card. For example, we might have files named Private1.atr, Private2.atr, ... Private8.atr for each Atari’s private disk, and one Shared.atr for the common disk. The ATR format starts with a 16-byte header (with magic bytes and disk size) followed by raw sectors​
+ATARIMANIA.COM
+. We can either parse that header or, since we control both ends, even choose to use simpler raw images (but ATR is fine and widely supported). Assuming ATR, our firmware will skip the 16-byte header and treat the rest as an array of 128-byte sectors (for single density ATRs; double density ATRs use 256-byte sectors or have multiple tracks – we’d handle those if needed by reading the ATR header info). We’ll maintain an in-memory table of mounted images: e.g., images[port][drive] could be file descriptors or pointers to opened files for that Atari port and drive number. The shared drive might be a special index that maps to the same file for all ports. The ESP32 can open these files at startup (when the hub boots) so that I/O is quicker (avoid re-opening on each access). It will also be prepared to flush writes to ensure data is saved. Direct-Sector Access Protocol: We design a simple set of commands that the Atari-side driver will use. For example, define: CMD_READ_SECTOR = 1, CMD_WRITE_SECTOR = 2 (and possibly others like format, or status – but at minimum read and write). The Atari will write to a command register (over PBI) with one of these codes. Before issuing the command, it will put the target sector number and drive number into predetermined registers. For instance:
+Register at offset 0: Command code (read/write/etc).
+Register at offset 1: Status/Result (hub to Atari).
+Register at offset 2: Drive/Partition number (which “disk” to use, e.g., 0 for shared, 1 for its private disk, etc.).
+Register at offset 3: Sector number low byte.
+Register at offset 4: Sector number high byte.
+Register at offset 5: Data (for data in/out).
+This gives a simple memory-mapped command interface. The Atari sets up Reg2-4 with drive and sector, then writes 1 to Reg0 for read. The ESP32 sees this and begins processing the read. When done (data ready), it could set a bit in Reg1 (Status) to indicate completion or any error. The Atari then reads 128 bytes from Reg5 (Data register) repeatedly to get the data. We could make Reg5 act like a FIFO or a single data port that always returns the next byte of the sector on each read. For writes, the Atari would write 128 bytes to Reg5 and then possibly issue the command or vice versa. Another approach is a block transfer register: e.g., map a 128-byte buffer into the PBI address space (this is feasible since $D1xx has 256 bytes). For example, use $D100–$D17F as a data buffer. Then the Atari could simply do an LDIR-type loop to transfer data there. However, that’s not much different than reading a single data register in a loop, except that the hardware could auto-increment an address pointer. Implementing a 128-byte memory buffer per port in hardware would be complicated without external RAM. So, the single register FIFO approach is simpler: every read from $D105 (for example) yields the next byte from the sector buffer inside the ESP32. We just have to ensure timing is such that the data is ready. Using READY for Flow Control: The ESP32 firmware can leverage the READY line to make the Atari wait while it prepares data. For instance, when a read command comes in, if the ESP32 hasn’t yet fetched the sector from SD, it can hold READY low which stalls the 6502 on its next access to the data register. Once the sector data is in a buffer, the ESP32 releases READY and allows the Atari to continue reading, now getting valid data bytes at full speed. The Atari’s driver could also poll a status register instead, but using READY is a neat way to avoid extra polling loops and maximize throughput (the CPU just “freezes” until data is truly ready, then blasts through the reads at top speed). Handling Multiple Ataris (Software): The firmware will treat each port independently from a logical standpoint. Likely, we’ll run a loop or have tasks checking each port’s state. An interrupt-driven design could work: each port’s EXTENB (or command register write) triggers an interrupt, and the ISR posts an event or directly starts handling the request. Because disk operations (SD card access) can be slow (a few hundred microseconds to a millisecond), we might dedicate one CPU core of the ESP32 to real-time bus interaction and the other core to do the file I/O and higher-level logic. The real-time core (say CORE1) would respond to bus signals, handle the READY line toggling, and move bytes on the bus, perhaps using a FIFO or DMA for efficiency. The other core (CORE0) can do the SD card reading and fill buffers. The ESP32 has a feature where the I2S peripheral can be configured in “parallel mode” to output data on multiple GPIOs in response to a clock. This is advanced, but potentially we could use it to automate placing bytes on the data bus synchronized to φ2, which would be the ultimate speed solution (the ESP32 would set up a DMA of 128 bytes through I2S to output on 8 GPIOs, triggered by φ2 pulses). If not using that, a tight loop or ISR can toggle the GPIOs. Since 128 bytes at ~1.79MHz is about 128* (0.56 µs) = 71.68 µs, which is quite fast – the ESP32 likely can’t handle that in an ISR in pure C for each byte. That’s why leveraging hardware or at least very optimized code is important for maximum speed. But even if it had to insert a wait state or two between bytes, it could still achieve the 127K or drop slightly to, say, 100K, which is still fine. File Consistency (Shared Partition): The firmware will implement locks for the shared ATR file. Suppose Atari A and Atari B both send a write to sector 100 on the shared drive at the same time. The hub can queue them. It might let A’s request go first, write the data to the ATR, then do B’s. If they are writing different parts of the disk, this serialization is fine (just some slight delay to B). If they happen to write the same sector or overlapping file, the later one will simply override the earlier – from a file system perspective, that could corrupt data unless the OSs at higher level have coordination (which they likely do not). So the hub cannot completely prevent logical conflicts – that’s up to the users or a higher-level protocol. But it can prevent low-level chaos by not intermixing the writes in time. We may also implement a rudimentary check: for example, detect if two Ataris are writing the directory sector at once, which could be a sign of trouble. But beyond scope – we assume use-case rules (e.g., only one machine writes to a shared file at a time, or they use a network DOS that coordinates – maybe a future enhancement). Interrupt Support: The PBI spec allows external devices to signal the Atari via IRQ (pin 35)​
+EN.WIKIPEDIA.ORG
+. In our design, we might not need to use IRQ at all – the Atari will typically initiate all disk operations. However, we could use an IRQ to, say, signal an Atari that the shared disk has been updated by another and maybe it should refresh a directory listing (though Atari DOSes wouldn’t know what to do with such an interrupt). So likely we skip IRQ. All communication is synchronous via the Atari’s own requests. This simplifies things: we don’t need to arbitrarily interrupt the Atari; we only respond when it asks for something. Example Workflow (Read): Putting it all together, consider Atari #1 wants to read a file from the shared disk. The Atari DOS (with our PBI driver) will issue CIO calls that end up calling our device. The sequence might be:
+Command Setup: The Atari writes the target sector number into the sector registers ($D102/$D103 in our scheme) and the drive number into $D101. It then writes the command code 1 (for read) into $D100 (command register). These are CPU writes to the PBI device registers. Each of those writes appears on the Atari’s bus; the interface logic captures them and forwards them to the ESP32. Perhaps the first few writes (sector, drive) are just stored in the hub’s shadow registers for that port. The final write to the command register triggers the action.
+ESP32 Handling: An ISR on the ESP32 sees the command register write (perhaps EXTENB went high for address $D100 with a specific data value). It records that Atari1 wants to read from drive X, sector Y. The firmware then fetches that sector: it looks up which file corresponds to drive X for port1 (say drive 0 = Shared.atr, drive 1 = Private1.atr, etc.), calculates the offset (e.g., sector Y * 128 + 16), and reads 128 bytes from the SD card into a buffer. This might take, say, 200–500 µs.
+Stalling Atari if needed: The Atari might, after issuing the command, immediately try to read from the data register $D104 expecting data. If our hub isn’t ready, we would assert READY=0 to pause the 6502 until the buffer is filled. The Atari’s CPU will effectively wait (the bus cycle doesn’t complete). As soon as the ESP32 has the first byte, it can place it on the data lines and release READY. This completes the Atari’s read instruction and it gets the byte. From this point, the Atari will proceed to read subsequent bytes (likely in a loop). The ESP32 can keep up by already having the whole sector and outputting one byte per read cycle. If the Atari is very fast and our method of outputting bytes is slightly slower, we can toggle READY for each byte to insert tiny waits – but ideally we want continuous streaming.
+Data Transfer: The Atari reads from $D104 128 times. Each read triggers the hub to output the next byte of the sector. We might implement this by having the ESP32 maintain an index into the buffer. On each φ2 cycle where R/W=1 and address corresponds to $D104, output buffer[index] on D0-D7, then index++.
+Completion: After 128 bytes, the sector is done. The Atari’s driver likely checks if the entire sector was read and then returns from the CIO call. We could set a status bit indicating completion or errors (like CRC or whatnot, but ATR doesn’t have per-sector CRC like a floppy drive might – any error would likely be an IO error from SD card, which is rare if the card is good). We clear any internal flags and await the next command.
+Example Workflow (Write): Writing a sector would be analogous: the Atari writes the sector number, drive, then writes the command code for write. At that moment, the hub could either start reading 128 bytes from Atari (i.e., the Atari will write to $D104 128 times with the data). Possibly the Atari’s driver will actually do that before issuing the command or after – depending on how we design it. A clean design is: the command write tells the hub “get ready to receive data”, and then the Atari pours out 128 bytes to the data register. Alternatively, the Atari could first fill a buffer register and then issue a command to flush it – but that double-buffers unnecessarily. So likely: for writes, the hub will treat any write to $D104 as data to be stored. We can either have a separate “FIFO” flag or use the command to know we are in a write transaction. E.g., Atari writes command 2 (write sector), then immediately starts writing 128 bytes to $D104. The ESP32 collects those in a buffer (each write triggers an ISR or is polled). Once 128 bytes are received, it writes them to the ATR file (SD card write). It could then set a status flag that the write is done. The Atari’s driver might poll a status register or just assume completion after the data is sent (though to be safe, it should ensure the write was successful – maybe by reading a status or waiting for READY to go true if we held it). Memory Mapping on the Atari side: We have to ensure the addresses we choose ($D100 etc.) do not conflict with anything. In XL/XE, $D100-$D1FF is mostly unused internally (except $D1FF as device select reg). PBI devices commonly use $D1E0-$D1E7 or such for their registers (some ICD devices did that). We can pick an unused chunk, say $D140-$D147, or just use $D100-$D105 as in the example, because when our device is enabled (DEVSEL bit set), the Atari will route those addresses to the external bus. It’s fine as long as no internal device is at those addresses – and none is ($D100-$D1FF is reserved for PBI). So that works.
+Atari-Side Firmware (PBI Device Driver)
+To make use of this hardware, each Atari needs a driver in its OS that knows how to talk to the hub. Fortunately, Atari’s OS provides a framework for PBI devices. We need to supply a small ROM (2KB max, often much smaller) that contains a Device Handler Table and the device driver code​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. This ROM will reside in the hub and be mapped to the Atari’s bus (via the cable) at $D800 on device enable. The process is:
+Identification: At specific bytes in the $D800 space, the ROM will have an identifier. Atari’s spec requires a sequence like $D5 $D2 (“DR” in ASCII) or similar as ID bytes for a valid PBI device​
+ATARIMAGAZINES.COM
+. Let’s assume our device uses the standard ID for a disk-like device.
+Device Name: In the handler table, we provide a device name for our device. Commonly, Atari disk drives use the device name “D:”, but since “D:” is taken by SIO (the OS serial disk handler) by default, we have a choice: We could override “D:” to divert all disk IO to our hub (making the SIO drives invisible unless our handler passes them through), or we define a new name like “H:” (for hub) or “N:” (for network disk). Many modern PBI HDD interfaces use “H:”. Let’s say we choose “H:” as our device name, indicating a hard-disk like device. This way, the user can access files as “H1:FILE.TXT” for drive 1 on the hub, etc., and still use “D:” for normal floppy if needed. The device name (like “H”) and unit handling will be set in the table.
+HATABS integration: The initialization routine in our ROM will be executed on cold boot. It must insert the address of the device handler into the OS’s device table (HATABS) and mark the device as present by setting the corresponding bit in DEVBIT (Device Mask)​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. The OS’s generic parallel device handler (at $E48F) will then route CIO calls to our device’s entry points.
+CIO Routines: We provide routines for the standard device operations: INIT, OPEN, CLOSE, READ (GET), WRITE (PUT), and STATUS. For a disk device, we might not need OPEN/CLOSE to do much (unless we want to reserve or validate a drive). The critical ones are READ and WRITE (CIO Get and Put). These will interface with our hardware registers to perform the actual sector IO.
+Because our design is focusing on raw sector access, one approach is to integrate at the SIO level – i.e., intercept the low-level disk reads that DOS would normally send via SIO. However, since the OS already has a parallel device handler layer, an easier method is to implement CIO calls for read/write that correspond to sector operations. If we want full DOS filesystems to work, we likely need to emulate the Disk Operating System (DOS) interface. This can be done by making our device D: and faking an SIO command interface (some PBI hard disks did something like this – they hooked into the OS disk driver). But an alternative is to use an existing DOS that supports “H:” devices. SpartaDOS X, for example, recognizes hard disk devices and can use them if the driver is present. Another option is to implement our device to respond to CIO calls in a way similar to how SpartaDOS’s HDD driver works (Konrad Kokoszkiewicz’s drivers for the IDE interface might be a reference). For simplicity, let’s assume our device will be accessed via CIO as a block device with 8 sub-units (H1: through H8: corresponding to drives). Each sub-unit corresponds to either a private ATR or the shared ATR, depending on configuration. The driver can decide: for example, H1:..H7: could be private disks for device IDs 1–7 (if we gave each Atari a different device ID – but we’re not doing that), or we can decide H1: = Atari1 private, H2: = Atari2 private, etc., but that doesn’t map well because each Atari only sees its own context. More straightforward: Each Atari sees H1: as its own primary drive on the hub, and H2: as the shared drive. In other words, the device can be programmed per machine to know which image is which. Since the ROM is per device (and identical for all Ataris in our hardware), we might configure via jumpers or a small NVRAM which ID the machine is (if we cared). However, because our hardware is essentially 8 independent devices, each Atari’s ROM could actually be personalized if we allowed that. But that’s overkill. Instead, we can just present two units on each machine: H1 and H2 (for private and shared). The ATR assignment is then done in the hub (the hub knows which port is which and can route H1 to a private image unique to that port and H2 to the common image). We will implement the GET and PUT handlers such that they perform a 128-byte transfer to/from the hub. The pseudo-assembly in the previous section’s code block shows how a read might be implemented: write sector to registers, issue command, then loop reading DATA register. We should also follow the Atari CIO conventions: On end of operation, set the Carry flag = 0 for success (Carry = 1 indicates error). If an error occurs (say, the hub couldn’t read the SD card), we might set an error code in the STATUS register that the Atari driver can translate to an IO error (CIO uses the Y register for status, etc.). Timing and OS Constraints: The PBI driver code runs with the OS interrupts disabled (during CIO calls typically). We must be cautious about using delay loops or waiting too long, because it could stall ANTIC DMA timing if we hold the bus. However, using READY to halt the CPU during data transfer effectively freezes the system momentarily – which is fine as long as we don’t do it excessively. 1 ms transfers are okay (the ANTIC will just wait as well, causing a slight visual stutter if in the middle of a frame, but hardly noticeable). Prototype Driver Outline:
+Device Handler Table (26 bytes) at $D800:
+2 bytes ID, device name “H1” (or just “H ” with unit number handling – actually, device name typically is 2 chars, like “H:”), and six jump vectors (we can point unused ones to a dummy RTS).
+INIT: Set up device mask and HATABS. Possibly print a sign-on message (some devices did, but not necessary).
+OPEN: Could check if the requested unit # is allowed (e.g., only 1 or 2 for our scheme) and return error if not. Could also refuse writes on the shared disk if we wanted to make it read-only under some conditions.
+GET (read): Determine the target sector. In Atari DOS, the CIO call for disk read might actually be a “sector read” command or a “read bytes from open file” call. If DOS uses CIO for reading files, then our GET needs to read whatever bytes DOS asks for. But since standard DOS uses SIO at a lower level, how does CIO integrate? Actually, the OS disk handler (for “D:”) uses SIO internally; but if we replaced “D:”, we’d intercept CIO commands like $52 (which means “read sector(s)” in the disk protocol). In fact, the Atari CIO for disk devices uses auxiliary bytes: Aux1 = device command (like 0x52 for read sector, 0x57 for write sector, etc.), Aux2 = number of sectors, and the buffer and sector number are passed via the IOCB. So if we were mimicking the disk device completely, we’d parse those. Alternatively, if we treat our device as a new type (not exactly an Atari disk drive), we might define our own commands. But to work with existing DOS, it’s easiest to emulate an Atari disk drive or hard disk. The simplest is to emulate an 8-inch drive or MyDOS hard disk where sectors are 128 bytes and the DOS just calls for sector reads via CIO. Many DOSes (like SpartaDOS) will use CIO calls to “H:” with XIO commands for sector access. We can intercept those easily. For our purposes, we’ll assume the driver GET routine knows it always deals in 128-byte sectors.
+Thus, GET will typically see Aux1 = $52 (80 decimal, the SIO “Read Sector” command for disks) and Aux2 = 1 (number of sectors). The sector number is provided in the IOCB buffer pointer or elsewhere (in Atari DOS, the IOCB’s buffer field points to a 3-byte structure containing the DDB – Disk Data Block – which includes the sector number; but that’s for SIO-based D: handler). Since implementing full D: protocol is complex, we might avoid that by having our own DOS or a simple one that uses this device straightforwardly. To not digress too far, we’ll simplify the assumption: The driver receives the sector number in a known way (perhaps we pass it via the filename or use XIO calls for reading/writing sectors directly). Anyway, the driver GET will do the register writes and read loop as described earlier. PUT will do the opposite for writing. STATUS could be used to return disk status (like write protect flag or disk size). If we want, we can implement FORMAT as an XIO command that creates a new ATR image or clears one – but that can also be done on PC side or not at all. Example ASCII Schematic (partial): Below is a simplified ASCII schematic focusing on one Atari port connection to the ESP32 hub:
+pgsql
+Copy
+Edit
+Atari PBI Port            Level Shifter & Buffer         ESP32 (Hub MCU)
+----------------          ----------------------         ----------------
+       A0-A15  --------> [ Address latch/buffer ] --\     
+                                (e.g., 74HC573)      +--> [ GPIO inputs ] (latched address lines)
+       R/W     --------> [ 74HCT245 DIR pin ] -------(controls data direction) 
+       EXTENB  --------> [ Enable logic for buffers ] --\____
+                                                          |   (control signals to enable/disable bus xfer)
+       φ2      --------> [ Sync logic (flip-flop) ] --\   |   [ GPIO input ] (φ2 used for timing)
+                                                       |   |
+       D0-D7   <--------> [ 74HCT245 Data Transceiver ] ---+--> [ GPIOs ] D0-D7 (bidirectional via transceiver)
+                         (OE controlled by EXTENB)     |
+       READY   <--------> [ Open-drain driver (e.g., MOSFET) ] <-- [ GPIO output ] (ESP32 pulls low to halt 6502)
+       IRQ     <--------> [ Open-drain driver ] <------- [ GPIO output ] (optional, not used in disk ops)
+       5V/GND  ---------------------------------------->  (Power and Ground lines)
+In this diagram, the address latch captures the address lines when EXTENB and φ2 indicate an access to the device. The ESP32 can then read the latched address at leisure (within a microsecond or so). The data transceiver allows data to flow in both directions, under control of R/W and EXTENB. READY is driven by the ESP32 (through a transistor) to the Atari’s READY input: if the ESP32 needs the Atari to wait (e.g., during a sector fetch from SD), it sets READY low. Because READY is an open-drain line on the Atari side (wired-OR with other devices), our driver uses an open-drain transistor as well – only pulling it low when needed, otherwise letting it stay high (pulled up internally or by resistor in Atari)​
+EN.WIKIPEDIA.ORG
+. For multiple ports, this whole block is replicated. The ESP32 has to manage up to 8 sets of these signals. As mentioned, a practical design might include a CPLD to multiplex these sets to a single 8-bit data bus and some control lines to the ESP32, rather than using 64+ GPIOs.
+Example ESP32 Pseudo-Code
+Below are pseudo-code snippets illustrating key parts of the ESP32 firmware logic. (In practice, we’d use ESP-IDF or Arduino framework. Pseudo-code here is for clarity, mixing C-like syntax with conceptual functions.) Initialization:
+c
+Copy
+Edit
+for(port = 1; port <= 8; port++) {
+    // Configure GPIO interrupts for EXTENB or command writes from each Atari
+    setupInterrupt(port.EXTENB_pin, RISING_EDGE, onExtSelect);
+    // Configure READY pins as outputs (initially not pulling low, i.e., ready = HIGH)
+    digitalWrite(port.READY_pin, HIGH);
+    // Maybe configure data bus and address bus pins as input by default
+}
+// Mount SD card and open ATR files
+SD.begin(...);
+for(int d=0; d<MAX_DRIVES; d++) {
+    char filename[32];
+    sprintf(filename, "Drive%d.atr", d);
+    file[d] = SD.open(filename, FILE_READ_WRITE);
+}
+We assume port.EXTENB_pin triggers when the Atari selects the device (which happens on any access while the device’s DEVSEL latch is set). However, the OS will likely keep the device selected during the entire CIO operation, so EXTENB might remain active for a burst of multiple bus accesses. It might be more useful to trigger on specific address writes (like the write to the command register). If we decode address lines in hardware (e.g., only generate an interrupt to ESP32 when $D100 is written), that’s ideal. If not, the ESP32 could read the latched address and determine what happened. Interrupt Handler (Command Register Write):
+c
+Copy
+Edit
+IRAM_ATTR void onCommandWrite(int port) {
+    uint8_t cmd = readDataBus(port);   // read the byte that was written by Atari
+    // Perhaps also read drive and sector registers:
+    uint8_t drive = readRegister(port, REG_DRIVE);      // our abstraction to read from latched values
+    uint16_t sector = readRegister(port, REG_SECTOR_LO) | (readRegister(port, REG_SECTOR_HI) << 8);
+
+    if(cmd == CMD_READ) {
+        // Indicate busy (could set a status register or LED)
+        ports[port].busy = true;
+        // Optionally hold READY low to pause Atari until data is ready
+        setReady(port, false);  // pull READY low
+        // Perform the read from storage (this could be offloaded to a lower-priority task or done here if quick)
+        File f = file[drive];
+        uint32_t offset = sector * 128 + ATR_HEADER_LEN;
+        f.seek(offset);
+        int bytesRead = f.read(ports[port].buffer, 128);
+        ports[port].buf_len = bytesRead;
+        ports[port].buf_index = 0;
+        // Data is ready, so allow Atari to proceed
+        setReady(port, true);   // release READY (Atari can resume)
+        // Perhaps set a flag that data ready, or simply rely on Atari reading immediately
+    }
+    else if(cmd == CMD_WRITE) {
+        ports[port].busy = true;
+        ports[port].buf_index = 0;
+        // Prepare to receive 128 bytes from Atari into buffer.
+        // We might not need to do anything here, just wait for data writes to come through on data register.
+    }
+    else if(cmd == CMD_STATUS) {
+        // Could handle a status request (like get disk size or something)
+        ports[port].status_byte = 0x00; // e.g., return 0 for OK
+    }
+}
+This interrupt is triggered on the rising edge of EXTENB combined with the address decode for the command register (assuming some external decode logic). We read the command and then act accordingly. For the read command, we immediately fetch the sector from the SD card (this might actually be done in a separate thread to avoid blocking the ISR too long, but since we pulled READY, the Atari is waiting anyway). Once the data is in ports[port].buffer, we release READY. The Atari will then start reading from the data register, which we handle in the next part. For the write command, we just set up to receive data. We don’t yet write to the SD card until all 128 bytes have been received. Data Register Access: We need to handle two scenarios: Atari reading data (after a read command) or Atari writing data (during a write command). If we didn’t set up separate interrupts for data register reads/writes, we might poll in a loop, but a better approach: use the GPIO interrupts on the φ2 clock or on the address lines. Perhaps we have a separate handler that triggers on any access to $D104 (data register). Many PBI device designs simply have the data register at a fixed address and use the 6502 to loop without further interrupts – in our case, we can either let the 6502 free-run through the loop and use hardware to sequentially present bytes (ideal), or generate an interrupt for each byte (which is a lot of interrupts). Ideally, a hardware state machine (in CPLD or even the 74HCT counters) could auto-increment a pointer on each read access. Without such hardware, we could attempt to use the ESP32’s RMT (remote control) or I2S peripherals to output a prepared sequence on the data lines in sync with φ2, triggered by the EXTENB as a start signal. This might be too detailed to implement here, so let’s assume we do it in software with careful timing or small wait states. Pseudo-code for byte transfer (software polled for simplicity):
+c
+Copy
+Edit
+// Called when Atari is reading data (could be polled in a tight loop by firmware after releasing READY)
+while(ports[port].buf_index < ports[port].buf_len) {
+    // Wait until Atari performs a read (could check EXTENB and R/W and address)
+    if(addressLatch == DATA_REG_ADDR && R_W == READ) {
+        uint8_t outByte = ports[port].buffer[ ports[port].buf_index++ ];
+        outputDataBus(port, outByte);  // put byte on data lines
+        // Toggle or latch something if needed (maybe not, if data is stable by φ2)
+        if(ports[port].buf_index == ports[port].buf_len) {
+            // last byte transferred
+            ports[port].busy = false;
+            // Optionally, we could clear EXTENB or just wait for Atari to deselect
+        }
+    }
+}
+
+// Called when Atari is writing data (during a write command)
+if(ports[port].busy && currentAddress == DATA_REG_ADDR && R_W == WRITE) {
+    uint8_t inByte = readDataBus(port);
+    ports[port].buffer[ ports[port].buf_index++ ] = inByte;
+    if(ports[port].buf_index == 128) {
+        // all bytes received
+        // Write them to the ATR file
+        File f = file[drive];
+        uint32_t offset = sector * 128 + ATR_HEADER_LEN;
+        f.seek(offset);
+        f.write(ports[port].buffer, 128);
+        ports[port].busy = false;
+        // Maybe set a status flag or LED for done
+    }
+}
+In the above conceptual code, addressLatch and R_W would be read from the hardware latch that captures the address and control of each bus access. Perhaps the firmware sits in a loop checking these for the active port. This is not interrupt-driven; it’s more like cycle-stepping. In reality, doing this purely in software might be unreliable at 1.79MHz. That’s why a hardware approach or at least partial hardware (like using the ESP32’s built-in SPI in slave mode to receive bytes, or I2S to send bytes) might be needed. Nevertheless, the code shows the logic: for a read, the ESP32 outputs bytes from its buffer one by one as the Atari reads; for a write, it collects bytes into a buffer and then writes them to storage after the sector is complete.
+Prototype Implementation Steps (Summary)
+PBI Connector and Interface Board: Build a small board that plugs into the Atari’s PBI (or ECI+cart) and brings the signals out to a cable. Include level translators (e.g., TXB0108 or a pair of 74AHCT245) so that the signals can travel over the cable without voltage mismatch. Ensure EXTENB, φ2, R/W, D0-D7, READY, GND (and 5V if needed) are connected. Use a 50-pin card edge for XL or a 2x17 + 2x? for XE (cartridge and ECI).
+Hub Hardware Assembly: On the hub side, connect each cable to the ESP32 through buffering logic. A breadboard prototype might use a single Atari first. For one Atari, you can wire the PBI lines to an ESP32 dev board via level shifters (e.g., a unidirectional level shifter for φ2 and EXTENB into ESP32, and a bidirectional level shifter for D0-D7). Use GPIOs on the ESP32 for D0-D7, EXTENB, φ2, READY. Write a simple test firmware to verify you can detect bus signals and toggle READY.
+Device ROM Development: Write the 6502 assembly for the PBI driver. Assemble it to fit in (for example) 512 bytes. You can test this in Altirra (an Atari emulator) by mapping the ROM at D800 and calling the init routine to see if it installs. Make sure the ID bytes and vectors are correct so that the OS recognizes the device on boot​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+. Test the CIO calls in the emulator by simulating responses (even before the ESP32 hardware is ready). Essentially, you could write a version of the driver that calls SIO as a fallback, test file operations using “H:” device in the emulator, then switch it to use the PBI registers.
+ESP32 Firmware Development: Start with single-port support. Use the Arduino IDE or ESP-IDF to program the ESP32. Test opening an ATR file from SD and serving a fixed sector to the Atari (e.g., have the Atari read sector 1 and see if the correct data comes). You may write a test program on the Atari that directly PEEKs/POKEs the device registers (in DOS or BASIC) to simulate a read command, so you can debug without the full DOS complexity.
+Speed Tuning: Once basic communication works, measure the transfer rate. If using READY, you can try removing READY stalling to see if the ESP32 can keep up. Use logic analyzer or scope to see the timing of bytes on the bus. Optimize as needed – possibly moving critical byte-feed code to IRAM and disabling interrupts during transfers. If that’s not enough, consider using the I2S approach: configure I2S in “TX slave” mode, clocked by φ2, with 8-bit parallel output on GPIO. This is an advanced trick: essentially the Atari’s φ2 would be the BCK (bit clock) in I2S terms, and you’d feed the sector data into the I2S DMA buffer, so hardware shifts one byte out per φ2 pulse. This could perfectly synchronize the 128-byte burst. Community projects have used ESP32 I2S to generate VGA signals, so this parallel output trick is feasible. For inputs (Atari writing), the ESP32’s I2S or RMT in input mode could similarly latch data. If hardware approach is too complex, stick with carefully timed GPIO access and perhaps settle for slightly less than 127KB/s if needed.
+Expand to Multiple Ports: After single-port success, extend the design. Introduce whatever multiplexing scheme you chose. You might give each port its own data pins if enough are available, or time-share them. Either way, write the code to handle up to 8 contexts. Simulate two Ataris (if you don’t have two real ones handy, maybe use an emulator plus a real one, though syncing that is tricky). Ensure that simultaneous requests are handled (e.g., initiate a read on Atari1, then immediately one on Atari2, and verify both complete correctly). Adjust READY logic per port so one doesn’t hold another’s READY, etc., (each port’s READY is separate).
+Consistency and Locking: Create a simple test where Atari A writes to a file on the shared drive and Atari B reads it after (or concurrently). Check that B sees the updated data correctly. Without a true multi-user FS, you might just test low-level sector changes. Implement any needed locking in the firmware.
+Hardware Build: Once the logic is verified, design a PCB for the hub. This might include 8 PBI connectors (which are rare; perhaps use IDC headers and ribbon cables, or 8 RJ45 jacks). Place level shifters and buffers accordingly. Or integrate a CPLD if used. Also, the PCB should host the ESP32 module (like an ESP32-WROOM module or an ESP32 devkit). Provide an SD card slot and voltage regulators. Possibly add a small OLED or LEDs for status (not essential).
+Enclosure and Cables: Use good quality shielded Ethernet cables to connect Ataris to the hub. Keep lengths as short as practical to reduce latency and signal degradation. If needed, adjust drive strength on the buffers (some chips have options) to reliably send signals over cable.
+Testing with DOS: Try various DOSes – e.g., Atari DOS II, MyDOS, SpartaDOS – by assigning drives. For instance, under SpartaDOS X, mount the shared drive as H1: and see if both machines can do directory listings. With MyDOS or BASIC, you might have to use the “H:” device by opening “H1:” etc., which might not be known to them (MyDOS might not support H: natively). If needed, write a simple utility or a custom DOS that is hard-coded to use our device. For demonstration, one could modify an existing DOS to treat our device as drive D2: or something. This is a software integration task.
+Throughout this process, iteratively refine the firmware for reliability and performance. Pay special attention to edge cases: Atari resets (the OS will re-init devices on cold boot; the hub should maybe reset internal state if it detects a reset line toggle on PBI pin 34​
+EN.WIKIPEDIA.ORG
+), error handling (if SD card is missing or full), and power-up sequencing (the device ROM should not be active until the Atari is ready, etc., which EXTENB logic already handles). By following these steps, we’d end up with a working prototype where multiple Atari XL/XE computers are connected to an ESP32 hub that provides fast (100+ KB/s) disk services. The users on each Atari could have their own “virtual disk” and a shared “virtual disk” to exchange files. Essentially, it’s like a mini-network file server tailored to the Atari’s parallel bus.
+4. Performance & Latency Considerations
+Achieving 127 KB/s transfer rates (approximately the theoretical max for 1.79 MHz 6502 doing one byte per 14 cycles) is a key goal. Several factors affect performance: bus timing, CPU involvement, microcontroller speed, and the efficiency of our communication protocol. Raw Bus Throughput: The Atari’s parallel bus can transfer data “as fast as the 6502 can execute instructions”​
+ATARIMAGAZINES.COM
+. In machine code, an unrolled loop of LDA (DATA_REG), STA (dest), ... can approach one byte every few cycles. Realistically, including loop overhead, one byte per ~8 cycles is achievable (which at 1.79MHz is ~223KB/s). However, our loop might not be completely unrolled and will have some overhead (especially if using CIO, which adds some call/return overhead). Still, 127KB/s is doable and has been cited as a PBI capability​
+ATARIMAGAZINES.COM
+ (in fact, Earl Rice mentions 100,000 bytes/s with not too much effort, and more with careful coding). Our design uses READY to ensure the ESP32 can keep up, but once the data is ready, we ideally stream without asserting READY for each byte. ESP32 Handling Time: The ESP32 needs to prepare data and then stream it. If the SD card access is the bottleneck, note that 128 bytes is a very small block – reading that from SD via SPI might take around 200µs (assuming ~5+ MB/s SPI speed). That’s well under 1ms. Writing 128 bytes might be slower (because SD writes in larger blocks typically), but the ESP32 can cache writes and flush occasionally to mitigate that. In any case, a few hundred microseconds of delay can be hidden behind READY without the user noticing much. The actual byte-by-byte output: if using a tight loop in ESP32 C, each iteration might be maybe 2 or 3 CPU cycles of the ESP32 per 6502 cycle if highly optimized (the ESP32 is ~134 times faster in clock speed). It might manage it, but if the ESP32 is interrupted or has to handle WiFi stack (we would disable WiFi during transfers or altogether for predictability), that could introduce jitter. That’s why relying on a dedicated hardware peripheral or writing the tight loop in IRAM and disabling interrupts is wise to get consistent timing. Latency: This is the delay from when the Atari requests data to when it starts receiving it. In our design, latency includes:
+The time for the ESP32 to decode the command (a few microseconds at most).
+The time to fetch from storage (maybe a few hundred microseconds).
+The time until the Atari is allowed to proceed (this is essentially how long READY is held). We want to minimize this to keep the system snappy. In practice, a 0.5ms delay at the start of a 128-byte transfer is negligible. The total time to transfer 128 bytes at ~127KB/s is 1ms, so total maybe 1.5ms per sector. If reading many sectors in a row (say DOS reading a file sequentially), our overhead per sector might stack up. Some DOS (like MyDOS) read multiple sectors in one go; our driver could potentially handle multi-sector requests by reading larger chunks from SD and then streaming them in one extended loop, further amortizing overhead.
+Parallel Access Impact: If two Ataris are hitting the shared drive heavily at the same time, the shared SD card’s bandwidth is split. SD cards can do a few MB/s easily, so even 8 Ataris at full 127KB/s only sum to ~1MB/s, which a decent SD card can handle. The ESP32 might struggle context-switching that quickly among 8 streams, but realistically it’s unlikely all 8 will max out concurrently. If they did, the ESP32 could pipeline operations (e.g., while one Atari is reading data out, preload the next Atari’s data in the background using the second core). CPU Load on Atari: Using our hub will consume the Atari’s CPU during transfers similarly to a normal disk IO (except much faster). For example, loading a 8KB file might take ~8KB/127KB/s = 0.063s – essentially instant from the user perspective. The Atari CPU will be busy for that 1/16th of a second entirely on the IO, which is fine. Because it’s so much faster than using the serial bus (where the CPU might be waiting on SIO for 10–20 seconds for the same file), this is a dramatic improvement. Even if our effective throughput ends up 80KB/s (like some earlier PBI hard disks achieved)​
+ATARIMANIA.COM
+, it’s still great (~0.1s for 8KB). DMA vs Polled Revisited: If we later implement DMA transfers, we could free the Atari CPU during disk operations. But on a single-tasking 8-bit, that’s not a huge gain (the program is likely waiting for the data anyway). One scenario where DMA could help is if we have a background file transfer between machines or a memory sharing scheme – outside the typical usage of a disk device. Since that’s out of scope, the polled method is fine. One thing to note: When READY is used to insert wait states on the 6502, it effectively slows the CPU clock for that duration. This can have side effects: if we hold READY for too long (more than a frame), ANTIC DMA timing for video might be affected (causing a possible frame tear or loss of video for a moment). But given we’re talking milliseconds at most, the effect is likely not noticeable. ANTIC will just resume after, possibly delaying the next screen draw slightly. If someone were playing music via IRQ during disk IO, those IRQs are delayed too, but disk IO is so short now that it likely won’t even cause an audible break. Testing Performance: We can measure by using a high-resolution timer on the ESP32 to timestamp when a command is received and when the last byte is sent. Also, from the Atari side, one can use the vertical blank counter to measure how many VBLs a file load takes. We expect nearly zero VBLs for small files (i.e., done within one 1/60s tick). Improving Performance: Potential enhancements:
+Use wider transfers: The Atari 6502 is 8-bit, but some PBI devices (like the IDE interface) actually used 16-bit transfers by latching two bytes and then doing two bytes per loop iteration​
+ATARIMANIA.COM
+. They achieved 50-80KB/s partly because of overhead, but theoretically could double throughput if done perfectly. We could attempt something similar by using the 6502 stack or page alignment to do slightly more efficient moves, but realistically, we’re already near the max without fancy CPU tricks.
+Burst mode: If the Atari driver knows it wants to read, say, 4 sectors, it could issue one command for 4 sectors and then the hub could stream 512 bytes in one go (and the Atari loop could just continue past 128 bytes). Standard DOS wouldn’t do this by itself except via multiple CIO calls, but a smart driver or a custom copy program could.
+Cache: The ESP32 could keep frequently accessed sectors in RAM to avoid SD access delays (though SD is pretty fast for our needs).
+Parallel processing: Use one ESP32 core for communication and one for SD card. Espressif’s SDK allows dedicating a core to a particular task. We could have an “IO core” that purely monitors the bus and feeds bytes, while the “FS core” handles opening files, reading data into buffers. They would communicate via queues or shared buffers (with proper locking). This two-stage pipeline can ensure the IO core is always ready to serve data as soon as it’s available, and the FS core can pre-fetch next sectors if needed.
+Zero wait state operation: The ideal is that after the command is issued, we never assert READY at all and the Atari just zooms through the transfer. To do this, the data must be ready and the ESP32 must be able to put each next byte on the bus by the time the Atari is ready for it (which is basically each φ2 cycle during the LDA $D104,X loop). If we manage that (with the I2S trick or similar), we achieve maximum throughput. If not, we might assert READY for a few cycles between bytes, effectively stretching each byte transfer slightly. Even if each byte had, say, one extra 6502 cycle wait, that would reduce speed to ~114KB/s. That’s still excellent. So a few microseconds of delay here or there won’t hurt much.
+Latency for Multi-Computer Sync: If two Ataris are truly simultaneously accessing different drives (one its private, another their private), the hub can actually service both nearly in parallel because the SD card can handle interleaved reads to two files and the bus to each Atari is separate. The ESP32 might alternate servicing them, but since they are independent, one doesn’t need to wait on the other’s data, only on shared resource (SD card) contention. Worst-case, if both try to read the exact same shared disk heavily, one might wait for the other to finish a sector (1ms or so), which is hardly noticeable. So from a user perspective, it will feel like each machine has a very fast disk drive; they won’t really feel slowdown unless maybe they both copy huge files to the shared disk at the exact same time, in which case things might serially queue but still at high speed (maybe each getting ~60KB/s if perfectly alternating – which is still way faster than original 810 drives at ~4 KB/s). Summary of Performance: We expect to hit around 100–127 KB/s per Atari for large transfers​
+ATARIMAGAZINES.COM
+. Small overhead per operation (a few hundred µs) gives maybe 8–10ms latency for a 1KB read (which is negligible). The ESP32 is capable of keeping up with multiple such streams due to its high clock and the fact that the aggregate bandwidth is well within its capabilities. Thus, the design meets the performance goals, making disk operations effectively instantaneous from the Atari user’s point of view. (For context: loading a 64KB program might take ~0.5s or less, whereas from a floppy it could be 5 minutes.)
+5. Prototype Schematics, ASCII Diagrams & Code Samples
+Below are conceptual diagrams and code snippets to illustrate the design:
+ASCII Hardware Schematic (Single-Port Focus)
+rust
+Copy
+Edit
+ Atari 800XL PBI Connector             Hub Interface (one of 8, shown for Port1)
+ ------------------------             ----------------------------------------
+  Pin 1  GND    ------------------+--> GND (common ground)
+  Pin 2  EXTSEL ------------------|--> [74LS138 decoder] --+--> /OE on 74HCT245
+                                 (Used to enable device)    |    (enables data bus buffer when EXTSEL active)
+  Pin 3  A0    >------------------------------------------->[D0]---\
+  Pin 4  A1    >------------------------------------------->[D1]    |
+  Pin 5  A2    >------------------------------------------->[D2]    |
+  ... Address lines ...                                  [Latch]   |  (Address latch captures A0-A7)
+  Pin 18 A14   >------------------------------------------->[D14]   |  (High address lines A8-A15 might use another latch)
+  Pin 20 A15   >------------------------------------------->[D15]---/
+  Pin 21 D0   <-> [Level translator] <--> Data0 (to ESP32 GPIO15)
+  Pin 22 D1   <-> [Level translator] <--> Data1 (to ESP32 GPIO16)
+  ... D2-D7 ...    (bi-directional buffer for 8-bit data bus)
+  Pin 28 D7   <-> [Level translator] <--> Data7 (to ESP32 GPIO22)
+  Pin 31 φ2   -> [Schmitt Buffer] --> Phi2 (ESP32 GPIO23 input, for sync)
+  Pin 34 RESET-> (could optionally reset hub or device logic, not strictly needed)
+  Pin 35 IRQ  <- [Open-drain buffer] <- IRQ (ESP32 GPIO17 output, optional)
+  Pin 36 RDY  <- [Open-drain buffer] <- Ready (ESP32 GPIO4 output, to pause 6502)&#8203;:contentReference[oaicite:50]{index=50}
+  Pin 46 R/W  -> [Inverter] -> DIR (Data buffer direction control)
+                          also -> ESP32 GPIO5 input (to know read/write cycle)
+  Pin 49 AUDIO -> (Not used, but could route to DAC for fun, or ignore)
+  5V out -> [Regulator] -> 3.3V for ESP32 (or power ESP32 via USB)
+Explanation: The address lines A0-A15 from the Atari are tapped and latched. A possible approach is using two 8-bit latches (for low byte and high byte of address) triggered by EXTSEL & φ2. The data lines D0-D7 go through a level translator/buffer (could be a single 74HCT245 if configured properly, or an 8-channel bidirectional level shifter IC). The R/W line from the Atari is used to set the direction of that buffer (after inversion or appropriate logic, because on a 74HCT245 DIR=H might mean A->B, etc., we align it such that when R/W=1 (read from Atari’s perspective), the buffer outputs data to Atari; when R/W=0, buffer takes data from Atari). The EXTSEL line goes into a 74LS138 or some decoder to generate chip-select signals. Actually, on a single device directly, EXTSEL itself (which is essentially the DEVSEL latch output ORed with address decode) can be used to enable the data buffer. In a multi-device (multi-slot) scenario, you’d decode addresses further. But since our device occupies all of D1xx when selected, we can just use EXTSEL as OE. The READY line is driven by an open-collector buffer on the hub side (like a transistor to ground or a 7406 inverter). We ensure it can only pull the line low, not drive it high (the Atari provides a pull-up internally). This allows wired-OR if multiple devices tried to use READY. Similarly for IRQ (if used). The ESP32 connects to the outputs of these buffers/latches:
+Data lines to bidirectional GPIOs (configured appropriately).
+Address lines to input GPIOs (latched stable during EXTSEL active).
+Control lines: φ2 to input (perhaps interrupt on rising edge), R/W to input, EXTSEL to input (or interrupt).
+READY and IRQ lines to output GPIOs (open-drain mode if available, or use external transistor).
+For multiple ports, replicate the data transceiver and maybe share the address latch bus with separate chip-select. But more practically, a CPLD would watch all EXTSEL lines and latch addresses with an ID.
+Device Register Map (as assumed in code)
+We define the following addresses (offsets from $D100 base, for example):
+$D100 – CMD_REG: Write-only from Atari (write command code here to start an operation). The ESP32 monitors writes to this register to trigger actions.
+$D101 – STATUS_REG: Readable by Atari (and possibly writable by ESP32). Contains status bits like BUSY or DATA_READY or error codes. Bit 0 could be Data Ready, bit 7 could be Error, etc. The Atari can poll this, though in our design we mainly use READY line instead.
+$D102 – DRIVE_REG: Write the drive/partition number here (0 = shared, 1 = private, etc.) before issuing a command. Could also hold unit number.
+$D103 – SECTOR_LO (low byte of sector number).
+$D104 – SECTOR_HI (high byte of sector number). Together, these allow 16-bit sector numbers (up to 65535 sectors).
+$D105 – DATA_REG: This is the data port. For READ commands, the Atari will read from $D105 repeatedly to get the data. For WRITE, the Atari will write to $D105 repeatedly to send data.
+(We have used $D100-D105; the rest of $D106-$D1FE can be unused or for future expansion, like multiple data regs to speed bursts or a control reg to mount images, etc.)
+Example Code Snippets
+Atari Side (6502 Assembly): The assembly below demonstrates a simple read sector using the above registers. It assumes:
+The sector number to read is in a 16-bit variable sector (could be provided by DOS or as an argument).
+The drive number is in a variable drive.
+A buffer in RAM is available to store the sector (e.g., pointed by BUF).
+We are using device “H:” on unit 1 for this example.
+assembly
+Copy
+Edit
+    LDX #$00             ; X will index through the buffer 0-127
+    STX STATUS_REG       ; (Optionally clear status reg or not used)
+    LDA drive            ; A = drive number (0 or 1)
+    STA DRIVE_REG        ; select drive (partition)
+    LDA sector           ; A = low byte of sector
+    STA SECTOR_LO        ; load sector low
+    LDA sector+1         ; A = high byte of sector
+    STA SECTOR_HI        ; load sector high
+    LDA #$01             ; Command code 1 = READ
+    STA CMD_REG          ; trigger the read command&#8203;:contentReference[oaicite:51]{index=51}
+
+    ; At this point, the ESP32/hub will fetch the sector.
+    ; We can either poll or just attempt to read DATA_REG with READY synchronization.
+WaitDataReady:
+    LDA STATUS_REG       ; check status bit (if implemented)
+    BITA #$01            ; assume bit0 = data ready flag
+    BEQ WaitDataReady    ; loop until data is ready (alternatively, the 6502 might be held by READY on first read)
+
+    LDY #$00             ; Y = 0 (offset in buffer)
+ReadLoop:
+    LDA DATA_REG         ; read a byte from data port (ESP32 provides next byte)&#8203;:contentReference[oaicite:52]{index=52}
+    STA BUF,Y            ; store into buffer at BUF[Y]
+    INY                  ; Y = Y+1
+    CPY #128             ; 128 bytes?
+    BNE ReadLoop         ; loop until 128 bytes read
+    ; (After loop, optionally check STATUS_REG for any errors)
+    RTS
+This code would reside in the GET handler of our device driver. In a real scenario, the sector number might come from the IOCB (e.g., IOCB->REC and REC LENGTH fields for a disk read command). Also, we might use the carry flag to signal error (carry set if error). If STATUS_REG indicates an error (like CRC or not ready), we would set carry and maybe store an error code in IOCB->STATUS. For writing, a similar loop would store bytes to DATA_REG. ESP32 Side (C code skeleton):
+c
+Copy
+Edit
+// Assume global buffers and state as defined earlier in section 3.
+void handle_read_command(int port) {
+    // Extract drive and sector from shadow registers (populated by previous writes from Atari)
+    uint8_t drive = ports[port].current_drive;
+    uint16_t sector = ports[port].current_sector;
+    // Indicate busy
+    ports[port].status |= STAT_BUSY;
+    // Read sector from ATR file
+    File f = images[drive];
+    size_t offset = sector * 128 + ATR_HEADER_SIZE;
+    f.seek(offset);
+    int n = f.read(ports[port].data_buf, 128);
+    if(n < 128) {
+        // If read failed or partial (shouldn't unless end of file), mark error
+        ports[port].status |= STAT_ERROR;
+    } else {
+        ports[port].status &= ~STAT_ERROR;
+    }
+    // Reset data index
+    ports[port].data_index = 0;
+    // Signal data ready (could set a flag or interrupt line or just rely on READY)
+    ports[port].status |= STAT_DATA_READY;
+    // Release READY line to let Atari proceed
+    set_ready_line(port, true);
+}
+
+void handle_write_command(int port) {
+    uint8_t drive = ports[port].current_drive;
+    uint16_t sector = ports[port].current_sector;
+    ports[port].status |= STAT_BUSY;
+    // Now we expect 128 bytes to be received via writes to DATA_REG
+    ports[port].data_index = 0;
+    // We might wait here or just return and let the data ISR collect bytes.
+    // After collecting:
+    File f = images[drive];
+    size_t offset = sector * 128 + ATR_HEADER_SIZE;
+    f.seek(offset);
+    int n = f.write(ports[port].data_buf, 128);
+    if(n < 128) {
+        ports[port].status |= STAT_ERROR;
+    } else {
+        ports[port].status &= ~STAT_ERROR;
+    }
+    ports[port].status &= ~STAT_BUSY;
+    // Perhaps set a flag that write completed.
+}
+The actual implementation would likely use interrupts or a state machine rather than these blocking functions. But this shows conceptually what happens: for read, fetch data then allow Atari to read it; for write, after receiving, write it out to storage. Handling Shared Access Example: Pseudocode for a part of the firmware that coordinates shared image access:
+c
+Copy
+Edit
+// Suppose drive 0 is the shared drive across all Ataris
+int sharedDriveID = 0;
+bool sharedBusy = false;
+int sharedBusyBy = -1; // which port currently writing to shared (if any)
+
+void on_command(int port, uint8_t cmd) {
+    uint8_t drive = ports[port].current_drive;
+    if(drive == sharedDriveID && cmd == CMD_WRITE) {
+        if(sharedBusy && sharedBusyBy != port) {
+            // Another port is writing to shared disk currently
+            // We can either queue this request or signal an error/busy to Atari.
+            // For simplicity, let's queue it (though Atari OS may not expect delays).
+            queue_request(port, cmd); 
+            return;
+        } else {
+            // Lock the shared drive for this port
+            sharedBusy = true;
+            sharedBusyBy = port;
+        }
+    }
+    // ... handle the command normally (for reads we might allow concurrent, for writes we locked as above)
+}
+
+// After completing a shared write:
+sharedBusy = false;
+sharedBusyBy = -1;
+if(queue not empty) {
+    // process next queued shared write
+    Request req = dequeue_request();
+    // possibly signal that Atari to try again (maybe by setting its status register to "ready now").
+    // Or just automatically handle it now (but the Atari might have timed out expecting an immediate action).
+}
+This is a simplistic approach. A more Atari-friendly way might be to implement a mutual exclusion at a higher level (like have one Atari open the file in R/W mode exclusively). But since that’s not in standard DOS, the above ensures at least sector writes aren’t interleaved.
+ASCII Diagram: Multi-Atari Hub (Conceptual)
+Below is a high-level block diagram of the entire system with 3 Atari connections shown (extend to 8 similarly):
+perl
+Copy
+Edit
+Atari #1         Atari #2         Atari #3           ...      ESP32 Hub
+--------         --------         --------                    --------
+PBI Port         PBI Port         PBI Port                     ESP32 MCU
+A0-15 ---\       A0-15 ---\       A0-15 ---\                   SD Card (storage)
+D0-7  --\ \      D0-7  --\ \      D0-7  --\ \                  WiFi (future net)
+R/W  -\  \ \     R/W  -\  \ \     R/W  -\  \ \                 (Dual Core)
+φ2 ---+---+----->[ Bus Interface & Arbitration Logic ]----->   Memory (buffers)
+EXTENB -/  / /   EXTENB -/  / /   EXTENB -/  / /
+READY  <-/ /     READY  <-/ /     READY  <-/ /
+IRQ    <-/       IRQ    <-/       IRQ    <-/
+         |            |             |
+        Cable        Cable         Cable
+         |            |             |
+       [ Port1 ]    [ Port2 ]     [ Port3 ]          (Inside hub, each Port block has transceivers & latch)
+           \__________|___________/
+                      |
+              [ Arbiter + Multiplexer ]
+                      |
+                [ ESP32 GPIO bus ]
+Explanation: Each Atari connects via a cable to a Port Interface block which contains the necessary level shifters and perhaps a latch. These feed into a central Arbiter + Multiplexer block which could be discrete logic or part of the ESP32’s role. The arbiter ensures only one port’s signals are forwarded to the ESP32 bus at a time (especially for data lines). The ESP32 then processes requests and uses the shared SD card to fulfill them. The READY lines back to each Atari are individually controlled so the ESP32 can stall one without affecting others.
+Notable Prototype Aspects
+Pinout for PBI connector (XL): For documentation, here is the PBI pinout focusing on signals we use​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+:
+perl
+Copy
+Edit
+PBI 800XL (50-pin edge)    Signal Name    Usage in design
+-----------------------    -----------    ----------------------------
+Pin 3-9,11-20 (odd top, 
+ even bottom)              A0-A15         Address lines (input to hub, latched)&#8203;:contentReference[oaicite:55]{index=55}
+
+Pin 21-28                  D0-D7          Data bus (bidirectional)&#8203;:contentReference[oaicite:56]{index=56}
+
+Pin 31                     φ2             Phase 2 clock (input to hub for timing)&#8203;:contentReference[oaicite:57]{index=57}
+
+Pin 34                     RESET          Reset (could reset device logic)
+
+Pin 35                     IRQ            Interrupt request (hub can pull low to interrupt Atari)&#8203;:contentReference[oaicite:58]{index=58}
+
+Pin 36                     RDY (READY)    Ready (hub pulls low to pause Atari)&#8203;:contentReference[oaicite:59]{index=59}
+
+Pin 38                     EXTDECODER     External decoder (not explicitly used in our design; in Atari, this goes low when $D1xx accessed and device selected)
+
+Pin 43                     MPD            Math Pack Disable (hub drives low when its ROM active)&#8203;:contentReference[oaicite:60]{index=60}
+
+Pin 46                     LATCHED R/W    Latched R/W (indicates read or write cycle)&#8203;:contentReference[oaicite:61]{index=61}
+
+Pins 1,10,19,29,30,...50   GND            Ground (multiple grounds for solid reference)&#8203;:contentReference[oaicite:62]{index=62}&#8203;:contentReference[oaicite:63]{index=63}
+
+Pin 2                      EXTSEL (E?)    External select (goes high when external device addressed & enabled)&#8203;:contentReference[oaicite:64]{index=64}&#8203;:contentReference[oaicite:65]{index=65}
+
+Pins 47,48                 +5V aux        +5V (on 600XL or for memory expansion – can be used to power small interface logic)
+This shows the critical signals and their relation. Our design heavily uses EXTSEL, R/W, φ2, RDY, and D0-D7. Conclusion: The prototype PBI disk hub demonstrates a fusion of 1980s Atari hardware with modern microcontroller tech. By carefully mapping the parallel bus to an ESP32 and using efficient protocols, we enable fast (100+ KB/s) disk sharing. Each Atari benefits from near-instant disk access, and the shared drive allows data exchange among machines – useful in classroom, demo parties, or multi-user lab scenarios where Ataris might network in a primitive LAN. The design presented includes detailed handling of bus signals, level shifting, a custom communication protocol, and considerations for ensuring data integrity and performance. This central hub concept can be expanded (with Wi-Fi, one could even mount disk images from a PC or Internet on the fly) or adapted (for instance, using a Raspberry Pi Pico or FPGA in place of ESP32). But the core idea remains: the Atari’s Parallel Bus Interface, though underutilized in its day, can be harnessed to bring these vintage computers into a cooperative setup with capabilities that rival (or exceed) floppy networks of that era, all while respecting the electrical and timing constraints of the platform. Sources:
+Atari PBI technical details and device addressing​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+PBI performance advantages (100 KB/s vs 2.4 KB/s of SIO)​
+ATARIMAGAZINES.COM
+​
+ATARIMAGAZINES.COM
+PBI pinouts and signal descriptions (Mapping the Atari, Appendix 14)​
+EN.WIKIPEDIA.ORG
+​
+EN.WIKIPEDIA.ORG
+Level shifting requirements for 5V Atari bus to 3.3V logic​
+FORUMS.ATARIAGE.COM
+ATR disk image format and usage in Atari emulators​
+ATARIMANIA.COM
+ICD KMK IDE interface performance (50–80 KB/s) as a real-world reference​
+ATARIMANIA.COM
+
+
+
+
+
+
